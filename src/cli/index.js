@@ -1,0 +1,86 @@
+﻿import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { loadEnv } from '../parser/env.js';
+import { loadNormalizationConfig } from '../filter/normalize.js';
+import { parseRequirementsFile } from '../parser/requirements.js';
+import { parseResumeFile } from '../parser/resume.js';
+import { collectJobs } from '../scraper/linkedin.js';
+import { applyHardFilters } from '../filter/hardFilter.js';
+import { scoreJobs } from '../scoring/softScore.js';
+import { writeReports } from '../output/reports.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(__dirname, '..', '..');
+
+function parseArgs(argv) {
+  const args = {};
+  for (const entry of argv) {
+    if (!entry.startsWith('--')) {
+      continue;
+    }
+    const [key, value = 'true'] = entry.slice(2).split('=');
+    args[key] = value;
+  }
+  return args;
+}
+
+async function ensureDirectories() {
+  await mkdir(path.join(projectRoot, 'reports'), { recursive: true });
+  await mkdir(path.join(projectRoot, 'data'), { recursive: true });
+}
+
+async function main() {
+  await ensureDirectories();
+  loadEnv(projectRoot);
+
+  const args = parseArgs(process.argv.slice(2));
+  const requirementsPath = path.resolve(projectRoot, args.requirements ?? 'data/requirements.md');
+  const resumePath = path.resolve(projectRoot, args.resume ?? 'data/resume.pdf');
+  const rawJobsPath = path.resolve(projectRoot, args.input ?? 'reports/raw-jobs.json');
+  const limit = Number(args.limit ?? 50);
+
+  const normalization = await loadNormalizationConfig(path.join(projectRoot, 'config', 'normalization.json'));
+  const requirements = await parseRequirementsFile(requirementsPath);
+  const resume = await parseResumeFile(resumePath);
+  const jobs = await collectJobs({ rawJobsPath, limit: Number(args.scrapeLimit ?? 200) });
+
+  const filteringResult = applyHardFilters(jobs, requirements, normalization);
+  const scoringResult = await scoreJobs({
+    jobs: filteringResult.accepted,
+    requirements,
+    resume,
+    env: process.env,
+  });
+
+  const shortlist = [...scoringResult.scored]
+    .sort((left, right) => right.totalScore - left.totalScore)
+    .slice(0, limit);
+
+  await writeFile(rawJobsPath, JSON.stringify(jobs, null, 2), 'utf8');
+  await writeReports({
+    projectRoot,
+    shortlist,
+    rejected: filteringResult.rejected,
+    needsReview: filteringResult.needsReview,
+    scoringFailures: scoringResult.failures,
+  });
+
+  const summary = {
+    jobsSeen: jobs.length,
+    accepted: filteringResult.accepted.length,
+    rejected: filteringResult.rejected.length,
+    needsReview: filteringResult.needsReview.length,
+    scored: scoringResult.scored.length,
+    scoringFailures: scoringResult.failures.length,
+    shortlist: shortlist.length,
+  };
+
+  console.log(JSON.stringify(summary, null, 2));
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});
