@@ -1,8 +1,14 @@
-﻿{
+{
   "locationBuckets": {
-    "denver-co": ["denver", "denver, co", "greater denver area", "hybrid in denver"],
-    "boulder-co": ["boulder", "boulder, co", "greater boulder area"],
-    "remote-us": ["remote", "remote in united states", "united states (remote)"]
+    "remote-us": ["remote", "united states remote", "us remote", "remote in united states"],
+    "remote-canada": ["canada remote", "remote canada", "remote in canada"],
+    "alberta-ca": ["alberta", "calgary", "edmonton", "alberta, canada"],
+    "british-columbia-ca": ["british columbia", "vancouver", "victoria", "bc, canada"],
+    "ontario-ca": ["ontario", "toronto", "waterloo", "ottawa", "ontario, canada"],
+    "seattle-wa": ["seattle", "seattle, wa", "washington state"],
+    "san-francisco-ca": ["san francisco", "san francisco bay area", "sf bay area", "san francisco, ca"],
+    "san-jose-ca": ["san jose", "san jose, ca", "south bay"],
+    "los-angeles-ca": ["los angeles", "los angeles, ca", "la metro"]
   },
   "employmentTypes": {
     "full-time": ["full-time", "full time", "permanent"],
@@ -10,16 +16,16 @@
     "internship": ["internship", "intern"]
   },
   "visaPolicies": {
-    "sponsorship-available": ["visa sponsorship available", "sponsorship available", "will sponsor"],
-    "no-sponsorship": ["no sponsorship", "unable to sponsor", "cannot sponsor", "not eligible for sponsorship"]
+    "tn-eligible": ["tn visa", "tn eligible", "can hire in canada", "can work in canada", "can work in the us without sponsorship"],
+    "no-sponsorship-required": ["no sponsorship", "unable to sponsor", "cannot sponsor", "not eligible for sponsorship", "must be authorized to work"],
+    "sponsorship-available": ["visa sponsorship available", "sponsorship available", "will sponsor"]
   },
   "companySizeBands": {
-    "1-10": [1, 10],
     "11-50": [11, 50],
     "51-200": [51, 200],
     "201-500": [201, 500],
     "501-1000": [501, 1000],
     "1001-5000": [1001, 5000],
-    "5001-10000": [5001, 10000]
+    "5000+": [5000, 1000000]
   }
 }

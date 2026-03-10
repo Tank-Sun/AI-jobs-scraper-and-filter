@@ -1,4 +1,4 @@
-﻿import { writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 function escapeCsv(value) {
@@ -18,6 +18,7 @@ function toCsvRows(shortlist) {
     'location',
     'skills',
     'responsibilities',
+    'company_quality',
     'growth',
     'title_score',
     'seniority',
@@ -34,6 +35,7 @@ function toCsvRows(shortlist) {
     job.location,
     job.breakdown.skills,
     job.breakdown.responsibilities,
+    job.breakdown.company_quality,
     job.breakdown.growth,
     job.breakdown.title,
     job.breakdown.seniority,
@@ -52,12 +54,13 @@ function toShortlistMarkdown(shortlist) {
         `Total: ${job.totalScore}`,
         `Skills: ${job.breakdown.skills}`,
         `Responsibilities: ${job.breakdown.responsibilities}`,
+        `Company Quality: ${job.breakdown.company_quality}`,
         `Growth: ${job.breakdown.growth}`,
         `Title: ${job.breakdown.title}`,
         `Seniority: ${job.breakdown.seniority}`,
         `Risk: ${job.breakdown.risk}`,
       ].join(' | ');
-      return `## ${index + 1}. ${job.title} @ ${job.company}\n\n- Location: ${job.location}\n- Scores: ${reasons}\n- Why: ${job.whyRecommended}\n- Gaps: ${(job.gaps ?? []).join(', ') || 'None'}\n- URL: ${job.jobUrl}\n`;
+      return `## ${index + 1}. ${job.title} @ ${job.company}\n\n- Location: ${job.location}\n- Scores: ${reasons}\n- Why: ${job.whyRecommended}\n- AI Signals: ${(job.aiSignals ?? []).join(', ') || 'None'}\n- Gaps: ${(job.gaps ?? []).join(', ') || 'None'}\n- URL: ${job.jobUrl}\n`;
     })
     .join('\n');
 }
@@ -68,16 +71,16 @@ function toRejectedMarkdown(rejected) {
     .join('\n');
 }
 
-function toNeedsReviewMarkdown(needsReview, scoringFailures) {
-  const flagged = needsReview.map((job) => `## ${job.title} @ ${job.company}\n\n- URL: ${job.jobUrl}\n- Review flags: ${job.reviewFlags.join(', ')}\n`);
-  const failures = scoringFailures.map((job) => `## ${job.title} @ ${job.company}\n\n- URL: ${job.jobUrl}\n- Scoring failure: ${job.message}\n`);
-  return [...flagged, ...failures].join('\n');
+function toScoringFailuresMarkdown(scoringFailures) {
+  return scoringFailures
+    .map((job) => `## ${job.title} @ ${job.company}\n\n- URL: ${job.jobUrl}\n- Scoring failure: ${job.message}\n`)
+    .join('\n');
 }
 
-export async function writeReports({ projectRoot, shortlist, rejected, needsReview, scoringFailures }) {
+export async function writeReports({ projectRoot, shortlist, rejected, scoringFailures }) {
   const reportsDir = path.join(projectRoot, 'reports');
   await writeFile(path.join(reportsDir, 'shortlist.csv'), toCsvRows(shortlist), 'utf8');
   await writeFile(path.join(reportsDir, 'shortlist.md'), toShortlistMarkdown(shortlist), 'utf8');
   await writeFile(path.join(reportsDir, 'rejected.md'), toRejectedMarkdown(rejected), 'utf8');
-  await writeFile(path.join(reportsDir, 'needs-review.md'), toNeedsReviewMarkdown(needsReview, scoringFailures), 'utf8');
+  await writeFile(path.join(reportsDir, 'scoring-failures.md'), toScoringFailuresMarkdown(scoringFailures), 'utf8');
 }

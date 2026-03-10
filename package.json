@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "jobs-filter",
   "version": "0.1.0",
   "private": true,
@@ -9,6 +9,7 @@
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
+    "@google/genai": "^1.29.0",
     "dotenv": "^16.4.5",
     "pdf-parse": "^1.1.1",
     "playwright": "^1.52.0",

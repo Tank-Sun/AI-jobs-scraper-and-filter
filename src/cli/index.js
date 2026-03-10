@@ -1,4 +1,4 @@
-﻿import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,14 +37,21 @@ async function main() {
 
   const args = parseArgs(process.argv.slice(2));
   const requirementsPath = path.resolve(projectRoot, args.requirements ?? 'data/requirements.md');
-  const resumePath = path.resolve(projectRoot, args.resume ?? 'data/resume.pdf');
+  const resumePath = path.resolve(projectRoot, args.resume ?? 'data/resume.md');
   const rawJobsPath = path.resolve(projectRoot, args.input ?? 'reports/raw-jobs.json');
   const limit = Number(args.limit ?? 50);
+  const source = args.source ?? 'auto';
+  const cdpUrl = args.cdpUrl ?? process.env.PLAYWRIGHT_CDP_URL;
 
   const normalization = await loadNormalizationConfig(path.join(projectRoot, 'config', 'normalization.json'));
   const requirements = await parseRequirementsFile(requirementsPath);
   const resume = await parseResumeFile(resumePath);
-  const jobs = await collectJobs({ rawJobsPath, limit: Number(args.scrapeLimit ?? 200) });
+  const jobs = await collectJobs({
+    rawJobsPath,
+    limit: Number(args.scrapeLimit ?? 200),
+    cdpUrl,
+    source,
+  });
 
   const filteringResult = applyHardFilters(jobs, requirements, normalization);
   const scoringResult = await scoreJobs({
@@ -58,23 +65,27 @@ async function main() {
     .sort((left, right) => right.totalScore - left.totalScore)
     .slice(0, limit);
 
+  const allRejected = [...filteringResult.rejected, ...scoringResult.aiRejected];
+
   await writeFile(rawJobsPath, JSON.stringify(jobs, null, 2), 'utf8');
   await writeReports({
     projectRoot,
     shortlist,
-    rejected: filteringResult.rejected,
-    needsReview: filteringResult.needsReview,
+    rejected: allRejected,
     scoringFailures: scoringResult.failures,
   });
 
   const summary = {
     jobsSeen: jobs.length,
-    accepted: filteringResult.accepted.length,
-    rejected: filteringResult.rejected.length,
-    needsReview: filteringResult.needsReview.length,
-    scored: scoringResult.scored.length,
+    deterministicRejected: filteringResult.rejected.length,
+    sentToScoring: filteringResult.accepted.length,
+    aiRejected: scoringResult.aiRejected.length,
+    shortlisted: shortlist.length,
     scoringFailures: scoringResult.failures.length,
-    shortlist: shortlist.length,
+    source,
+    usedCdpUrl: Boolean(cdpUrl),
+    scoringMode: scoringResult.scoringMode,
+    resumePath: resume.path,
   };
 
   console.log(JSON.stringify(summary, null, 2));

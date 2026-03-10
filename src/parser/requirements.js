@@ -1,71 +1,105 @@
-﻿import { readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
 function normalizeValue(value) {
   return value.trim().toLowerCase();
 }
 
-function parseScalar(value) {
-  const trimmed = value.trim();
-  const numeric = Number(trimmed);
-  return Number.isFinite(numeric) ? numeric : trimmed;
+function stripBom(value) {
+  return value.replace(/^\uFEFF/, '');
 }
 
-export async function parseRequirementsFile(filePath) {
-  const raw = await readFile(filePath, 'utf8');
-  const lines = raw.split(/\r?\n/);
-  const result = {};
-  let currentKey = null;
+const listKeys = new Set([
+  'must_have_locations',
+  'must_have_company_size',
+  'must_have_employment_types',
+  'visa_policy',
+  'target_titles',
+  'acceptable_titles',
+  'experience_level',
+  'must_have_skills',
+  'nice_to_have_skills',
+  'industry_preferences',
+  'negative_skills',
+  'red_flags',
+]);
 
-  for (const line of lines) {
-    if (!line.trim()) {
-      continue;
-    }
+const defaultWeights = {
+  skills: 40,
+  responsibilities: 15,
+  company_quality: 15,
+  title: 10,
+  seniority: 10,
+  growth: 5,
+  risk: 5,
+};
 
-    const sectionMatch = /^(\w[\w_]*):\s*$/.exec(line.trim());
-    if (sectionMatch) {
-      currentKey = sectionMatch[1];
-      result[currentKey] = [];
-      continue;
-    }
+function ensureList(result, key) {
+  result[key] ??= [];
+}
 
-    const scalarMatch = /^(\w[\w_]*):\s+(.+)$/.exec(line.trim());
-    if (scalarMatch && !line.startsWith('  ')) {
-      result[scalarMatch[1]] = parseScalar(scalarMatch[2]);
-      currentKey = null;
-      continue;
-    }
-
-    if (currentKey && line.trim().startsWith('- ')) {
-      result[currentKey].push(normalizeValue(line.trim().slice(2)));
-      continue;
-    }
-
-    if (currentKey === 'weights' && line.startsWith('  ')) {
-      const [rawKey, rawValue] = line.trim().split(/:\s+/);
-      result.weights ??= {};
-      result.weights[rawKey] = Number(rawValue);
-    }
+function finalizeRequirements(result) {
+  for (const key of listKeys) {
+    ensureList(result, key);
   }
 
-  const requiredArrays = [
+  result.weights = {
+    ...defaultWeights,
+    ...(result.weights ?? {}),
+  };
+
+  const requiredLists = [
     'must_have_locations',
     'must_have_company_size',
     'must_have_employment_types',
-    'must_have_visa_policy',
+    'visa_policy',
     'target_titles',
+    'must_have_skills',
     'nice_to_have_skills',
     'red_flags',
   ];
 
-  for (const key of requiredArrays) {
+  for (const key of requiredLists) {
     if (!Array.isArray(result[key])) {
       throw new Error(`Missing required list: ${key}`);
     }
   }
 
-  if (!result.weights || typeof result.weights !== 'object') {
-    throw new Error('Missing required weights section');
+  result.all_titles = [...new Set([...result.target_titles, ...result.acceptable_titles])];
+  return result;
+}
+
+export async function parseRequirementsFile(filePath) {
+  const raw = stripBom(await readFile(filePath, 'utf8'));
+  const lines = raw.split(/\r?\n/);
+  const result = { weights: {} };
+  let currentKey = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const sectionMatch = /^(\w[\w_]*):\s*$/.exec(trimmed);
+    if (sectionMatch) {
+      currentKey = sectionMatch[1];
+      if (currentKey !== 'weights') {
+        ensureList(result, currentKey);
+      }
+      continue;
+    }
+
+    if (currentKey === 'weights' && line.startsWith('  ')) {
+      const [rawKey, rawValue] = trimmed.split(/:\s+/);
+      result.weights[rawKey] = Number(rawValue);
+      continue;
+    }
+
+    if (currentKey && trimmed.startsWith('- ')) {
+      ensureList(result, currentKey);
+      result[currentKey].push(normalizeValue(trimmed.slice(2)));
+    }
   }
 
-  return result;
+  return finalizeRequirements(result);
 }
