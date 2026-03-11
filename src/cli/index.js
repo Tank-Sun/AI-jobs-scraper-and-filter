@@ -7,6 +7,7 @@ import { loadNormalizationConfig } from '../filter/normalize.js';
 import { parseRequirementsFile } from '../parser/requirements.js';
 import { parseResumeFile } from '../parser/resume.js';
 import { collectJobs } from '../scraper/linkedin.js';
+import { dedupeJobs } from '../filter/dedupe.js';
 import { applyHardFilters } from '../filter/hardFilter.js';
 import { scoreJobs } from '../scoring/softScore.js';
 import { writeReports } from '../output/reports.js';
@@ -52,8 +53,9 @@ async function main() {
     cdpUrl,
     source,
   });
+  const dedupeResult = dedupeJobs(jobs, normalization);
 
-  const filteringResult = applyHardFilters(jobs, requirements, normalization);
+  const filteringResult = applyHardFilters(dedupeResult.uniqueJobs, requirements, normalization);
   const scoringResult = await scoreJobs({
     jobs: filteringResult.accepted,
     requirements,
@@ -69,6 +71,8 @@ async function main() {
 
   const summary = {
     jobsSeen: jobs.length,
+    jobsAfterDedupe: dedupeResult.uniqueJobs.length,
+    duplicatesRemoved: dedupeResult.duplicatesRemoved,
     deterministicRejected: filteringResult.rejected.length,
     sentToScoring: filteringResult.accepted.length,
     aiRejected: scoringResult.aiRejected.length,
@@ -85,7 +89,7 @@ async function main() {
     shortlist,
     rejected: allRejected,
     scoringFailures: scoringResult.failures,
-    rawJobs: jobs,
+    rawJobs: dedupeResult.uniqueJobs,
     summary,
   });
 

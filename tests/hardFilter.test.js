@@ -67,6 +67,26 @@ test('applyHardFilters accepts deterministic matches and keeps AI signals for am
   assert.match(result.accepted[0].aiSignals.join(','), /title_not_in_preferred_lists/);
 });
 
+test('applyHardFilters keeps company-size mismatches as AI signals instead of hard rejection', () => {
+  const jobs = [
+    {
+      title: 'Software Engineer',
+      company: 'BigCo',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'No sponsorship',
+      companySize: '5000+',
+      description: 'Typescript React product role',
+      jobUrl: 'https://example.com/2',
+    },
+  ];
+
+  const result = applyHardFilters(jobs, requirements, normalization);
+  assert.equal(result.accepted.length, 1);
+  assert.equal(result.rejected.length, 0);
+  assert.match(result.accepted[0].aiSignals.join(','), /company_size_outside_preferred_range/);
+});
+
 test('applyHardFilters rejects explicit hard filter mismatches', () => {
   const jobs = [
     {
@@ -77,12 +97,12 @@ test('applyHardFilters rejects explicit hard filter mismatches', () => {
       visaPolicy: 'No sponsorship',
       companySize: '5000+',
       description: 'Unpaid trial project in Java',
-      jobUrl: 'https://example.com/2',
+      jobUrl: 'https://example.com/3',
     },
   ];
 
   const result = applyHardFilters(jobs, requirements, normalization);
   assert.equal(result.accepted.length, 0);
   assert.equal(result.rejected.length, 1);
-  assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /location|companySize|redFlags/);
+  assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /location|redFlags/);
 });

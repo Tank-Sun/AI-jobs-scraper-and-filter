@@ -83,6 +83,7 @@ function buildGeminiPrompt(job, requirements, resume) {
     'You are evaluating whether a LinkedIn job should remain on a software engineer shortlist.',
     'Hard filters already removed deterministic mismatches. You should now decide whether to shortlist or reject this job overall.',
     'Be strict about title fit, skill fit, visa practicality, and likely day-to-day work. Prefer concise evidence from the job text.',
+    'Treat company size as a soft preference. Missing or slightly outside-range company size should not by itself cause rejection.',
     '',
     'Requirements:',
     JSON.stringify({

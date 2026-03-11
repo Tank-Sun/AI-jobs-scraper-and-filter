@@ -26,7 +26,7 @@ export function applyHardFilters(jobs, requirements, normalization) {
     if (!normalized.companySizeBucket) {
       aiSignals.push('missing_company_size_bucket');
     } else if (!requirements.must_have_company_size.includes(normalized.companySizeBucket)) {
-      pushReason(reasons, 'companySize', `Company size ${normalized.companySizeBucket} is not allowed`);
+      aiSignals.push('company_size_outside_preferred_range');
     }
 
     if (!normalized.employmentTypeBucket) {
