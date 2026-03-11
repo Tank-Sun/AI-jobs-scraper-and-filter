@@ -46,6 +46,19 @@ function riskScore(job) {
   return clampScore(95 - signalPenalty - negativePenalty);
 }
 
+function calculateWeightedTotalScore(breakdown, weights) {
+  return clampScore(
+    (breakdown.skills * weights.skills +
+      breakdown.responsibilities * weights.responsibilities +
+      breakdown.company_quality * weights.company_quality +
+      breakdown.title * weights.title +
+      breakdown.seniority * weights.seniority +
+      breakdown.growth * weights.growth +
+      breakdown.risk * weights.risk) /
+      100
+  );
+}
+
 function heuristicScore(job, requirements, resume) {
   const weights = requirements.weights;
   const breakdown = {
@@ -58,16 +71,7 @@ function heuristicScore(job, requirements, resume) {
     risk: riskScore(job),
   };
 
-  const totalScore = clampScore(
-    (breakdown.skills * weights.skills +
-      breakdown.responsibilities * weights.responsibilities +
-      breakdown.company_quality * weights.company_quality +
-      breakdown.title * weights.title +
-      breakdown.seniority * weights.seniority +
-      breakdown.growth * weights.growth +
-      breakdown.risk * weights.risk) /
-      100
-  );
+  const totalScore = calculateWeightedTotalScore(breakdown, weights);
 
   return {
     decision: totalScore >= 60 ? 'shortlist' : 'reject',
@@ -246,6 +250,38 @@ async function saveScoreCache(cachePath, cache) {
   await writeFile(cachePath, JSON.stringify(cache, null, 2), 'utf8');
 }
 
+function normalizeGeminiScoreValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+
+  const normalized = parsed >= 0 && parsed <= 10 ? parsed * 10 : parsed;
+  return clampScore(normalized);
+}
+
+function normalizeGeminiResult(parsed, weights) {
+  const breakdown = {
+    skills: normalizeGeminiScoreValue(parsed.breakdown.skills),
+    responsibilities: normalizeGeminiScoreValue(parsed.breakdown.responsibilities),
+    company_quality: normalizeGeminiScoreValue(parsed.breakdown.company_quality),
+    title: normalizeGeminiScoreValue(parsed.breakdown.title),
+    seniority: normalizeGeminiScoreValue(parsed.breakdown.seniority),
+    growth: normalizeGeminiScoreValue(parsed.breakdown.growth),
+    risk: normalizeGeminiScoreValue(parsed.breakdown.risk),
+  };
+
+  return {
+    decision: parsed.decision,
+    totalScore: calculateWeightedTotalScore(breakdown, weights),
+    breakdown,
+    whyRecommended: parsed.why_recommended,
+    rejectReason: parsed.reject_reason ?? '',
+    gaps: Array.isArray(parsed.gaps) ? parsed.gaps.slice(0, 8) : [],
+    scoringSource: 'gemini',
+  };
+}
+
 function buildCacheEntry({ key, signature, mode, status, result, reasons, message, originalMessage }) {
   return {
     key,
@@ -277,23 +313,7 @@ async function callGemini({ apiKey, model, job, requirements, resume }) {
   }
 
   const parsed = JSON.parse(response.text);
-  return {
-    decision: parsed.decision,
-    totalScore: clampScore(parsed.total_score),
-    breakdown: {
-      skills: clampScore(parsed.breakdown.skills),
-      responsibilities: clampScore(parsed.breakdown.responsibilities),
-      company_quality: clampScore(parsed.breakdown.company_quality),
-      title: clampScore(parsed.breakdown.title),
-      seniority: clampScore(parsed.breakdown.seniority),
-      growth: clampScore(parsed.breakdown.growth),
-      risk: clampScore(parsed.breakdown.risk),
-    },
-    whyRecommended: parsed.why_recommended,
-    rejectReason: parsed.reject_reason ?? '',
-    gaps: Array.isArray(parsed.gaps) ? parsed.gaps.slice(0, 8) : [],
-    scoringSource: 'gemini',
-  };
+  return normalizeGeminiResult(parsed, requirements.weights);
 }
 
 function buildCacheAwareResult({ job, cacheKey, signature, scoringMode, cached }) {
@@ -497,6 +517,9 @@ export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) 
 export const __testables = {
   buildScoreCacheKey,
   buildScoreSignature,
+  calculateWeightedTotalScore,
   mapWithConcurrency,
+  normalizeGeminiResult,
+  normalizeGeminiScoreValue,
   resolveScoreConcurrency,
 };

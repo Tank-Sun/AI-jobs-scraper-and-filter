@@ -4,7 +4,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { scoreJobs } from '../src/scoring/softScore.js';
+import { scoreJobs, __testables } from '../src/scoring/softScore.js';
 
 const requirements = {
   must_have_locations: ['remote-us'],
@@ -54,6 +54,82 @@ const jobs = [
     negativeSkillMatches: [],
   },
 ];
+
+const { calculateWeightedTotalScore, normalizeGeminiResult } = __testables;
+
+test('normalizeGeminiResult scales 1-10 Gemini scores up to 0-100 and recomputes total from weights', () => {
+  const normalized = normalizeGeminiResult({
+    decision: 'shortlist',
+    total_score: 8,
+    breakdown: {
+      skills: 9,
+      responsibilities: 8,
+      company_quality: 7,
+      title: 9,
+      seniority: 8,
+      growth: 7,
+      risk: 6,
+    },
+    why_recommended: 'Strong fit.',
+    reject_reason: '',
+    gaps: ['kubernetes'],
+  }, requirements.weights);
+
+  assert.equal(normalized.totalScore, 82);
+  assert.deepEqual(normalized.breakdown, {
+    skills: 90,
+    responsibilities: 80,
+    company_quality: 70,
+    title: 90,
+    seniority: 80,
+    growth: 70,
+    risk: 60,
+  });
+});
+
+test('normalizeGeminiResult ignores inconsistent Gemini total_score and recomputes from normalized breakdown', () => {
+  const normalized = normalizeGeminiResult({
+    decision: 'shortlist',
+    total_score: 92,
+    breakdown: {
+      skills: 9,
+      responsibilities: 85,
+      company_quality: 8,
+      title: 90,
+      seniority: 7,
+      growth: 88,
+      risk: 6,
+    },
+    why_recommended: 'Strong fit.',
+    reject_reason: '',
+    gaps: [],
+  }, requirements.weights);
+
+  assert.equal(normalized.totalScore, 84);
+  assert.deepEqual(normalized.breakdown, {
+    skills: 90,
+    responsibilities: 85,
+    company_quality: 80,
+    title: 90,
+    seniority: 70,
+    growth: 88,
+    risk: 60,
+  });
+});
+
+test('calculateWeightedTotalScore matches the documented requirements weights', () => {
+  const breakdown = {
+    skills: 90,
+    responsibilities: 85,
+    company_quality: 80,
+    title: 90,
+    seniority: 70,
+    growth: 88,
+    risk: 60,
+  };
+
+  assert.equal(calculateWeightedTotalScore(breakdown, requirements.weights), 84);
+});
 
 test('scoreJobs persists and reuses scoring cache entries', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'jobs-filter-cache-'));
