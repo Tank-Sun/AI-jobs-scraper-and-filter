@@ -12,6 +12,9 @@ data/*.txt
 data/*.json
 !data/.gitkeep
 !data/requirements.example.md
+!data/resume.example.md
+data/requirements.md
+data/resume.md
 
 coverage/
 .nyc_output/
