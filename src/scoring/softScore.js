@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import { GoogleGenAI, Type } from '@google/genai';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
@@ -100,7 +104,7 @@ function buildGeminiPrompt(job, requirements, resume) {
     '- Use aiSignals as hints about uncertainty or possible concerns, but do not blindly mirror them.',
     '',
     'Scoring guidance:',
-    '- skills: how well the role matches the candidate's actual strengths and required stack.',
+    '- skills: how well the role matches the candidate\'s actual strengths and required stack.',
     '- responsibilities: how well the actual work matches product/full-stack/frontend/AI application engineering goals.',
     '- company_quality: domain and company context fit, treated as secondary to the role itself.',
     '- title: how well the title aligns with the target or acceptable titles.',
@@ -184,6 +188,69 @@ function geminiResponseSchema() {
   };
 }
 
+function buildScoreCacheKey(job) {
+  return job.jobUrl || `${job.company ?? ''}::${job.title ?? ''}::${job.location ?? ''}`;
+}
+
+function buildScoreSignature(job, model) {
+  return createHash('sha1')
+    .update(
+      JSON.stringify({
+        model,
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        employmentType: job.employmentType,
+        visaPolicy: job.visaPolicy,
+        companySize: job.companySize,
+        postedTime: job.postedTime,
+        applicantInfo: job.applicantInfo,
+        description: job.description,
+        aiSignals: job.aiSignals,
+        mustHaveSkillMatches: job.mustHaveSkillMatches,
+        negativeSkillMatches: job.negativeSkillMatches,
+      })
+    )
+    .digest('hex');
+}
+
+async function loadScoreCache(cachePath) {
+  if (!cachePath) {
+    return { entries: {} };
+  }
+
+  try {
+    const raw = await readFile(cachePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && parsed.entries ? parsed : { entries: {} };
+  } catch {
+    return { entries: {} };
+  }
+}
+
+async function saveScoreCache(cachePath, cache) {
+  if (!cachePath) {
+    return;
+  }
+
+  await mkdir(path.dirname(cachePath), { recursive: true });
+  await writeFile(cachePath, JSON.stringify(cache, null, 2), 'utf8');
+}
+
+function buildCacheEntry({ key, signature, mode, status, result, reasons, message, originalMessage }) {
+  return {
+    key,
+    signature,
+    mode,
+    status,
+    result,
+    reasons,
+    message,
+    originalMessage,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 async function callGemini({ apiKey, model, job, requirements, resume }) {
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
@@ -220,14 +287,40 @@ async function callGemini({ apiKey, model, job, requirements, resume }) {
   };
 }
 
-export async function scoreJobs({ jobs, requirements, resume, env }) {
+export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) {
   const scored = [];
   const failures = [];
   const aiRejected = [];
   const apiKey = env.GEMINI_API_KEY;
   const model = env.GEMINI_MODEL || DEFAULT_MODEL;
+  const scoringMode = apiKey ? model : 'heuristic-only';
+  const cache = await loadScoreCache(cachePath);
 
   for (const job of jobs) {
+    const cacheKey = buildScoreCacheKey(job);
+    const signature = buildScoreSignature(job, scoringMode);
+    const cached = cache.entries?.[cacheKey];
+
+    if (cached && cached.signature === signature && cached.mode === scoringMode) {
+      if (cached.status === 'scored') {
+        scored.push({ ...job, ...cached.result });
+        continue;
+      }
+      if (cached.status === 'rejected') {
+        aiRejected.push({ ...job, ...cached.result, reasons: cached.reasons ?? [] });
+        continue;
+      }
+      if (cached.status === 'failed') {
+        failures.push({
+          ...job,
+          scoringFailed: true,
+          message: cached.message,
+          originalMessage: cached.originalMessage,
+        });
+        continue;
+      }
+    }
+
     try {
       const result = apiKey
         ? await callGemini({ apiKey, model, job, requirements, resume })
@@ -235,14 +328,29 @@ export async function scoreJobs({ jobs, requirements, resume, env }) {
 
       const enriched = { ...job, ...result };
       if (result.decision === 'reject') {
-        aiRejected.push({
-          ...enriched,
-          reasons: [{ field: 'ai', message: result.rejectReason || result.whyRecommended }],
+        const reasons = [{ field: 'ai', message: result.rejectReason || result.whyRecommended }];
+        aiRejected.push({ ...enriched, reasons });
+        cache.entries[cacheKey] = buildCacheEntry({
+          key: cacheKey,
+          signature,
+          mode: scoringMode,
+          status: 'rejected',
+          result,
+          reasons,
         });
+        await saveScoreCache(cachePath, cache);
         continue;
       }
 
       scored.push(enriched);
+      cache.entries[cacheKey] = buildCacheEntry({
+        key: cacheKey,
+        signature,
+        mode: scoringMode,
+        status: 'scored',
+        result,
+      });
+      await saveScoreCache(cachePath, cache);
     } catch (error) {
       try {
         const fallback = heuristicScore(job, requirements, resume);
@@ -252,23 +360,52 @@ export async function scoreJobs({ jobs, requirements, resume, env }) {
           scoringFailureMessage: error instanceof Error ? error.message : String(error),
         };
         if (fallback.decision === 'reject') {
-          aiRejected.push({
-            ...enriched,
-            reasons: [{ field: 'fallback', message: fallback.rejectReason || fallback.whyRecommended }],
+          const reasons = [{ field: 'fallback', message: fallback.rejectReason || fallback.whyRecommended }];
+          aiRejected.push({ ...enriched, reasons });
+          cache.entries[cacheKey] = buildCacheEntry({
+            key: cacheKey,
+            signature,
+            mode: scoringMode,
+            status: 'rejected',
+            result: fallback,
+            reasons,
           });
         } else {
           scored.push(enriched);
+          cache.entries[cacheKey] = buildCacheEntry({
+            key: cacheKey,
+            signature,
+            mode: scoringMode,
+            status: 'scored',
+            result: fallback,
+          });
         }
+        await saveScoreCache(cachePath, cache);
       } catch (fallbackError) {
-        failures.push({
+        const failure = {
           ...job,
           scoringFailed: true,
           message: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
           originalMessage: error instanceof Error ? error.message : String(error),
+        };
+        failures.push(failure);
+        cache.entries[cacheKey] = buildCacheEntry({
+          key: cacheKey,
+          signature,
+          mode: scoringMode,
+          status: 'failed',
+          message: failure.message,
+          originalMessage: failure.originalMessage,
         });
+        await saveScoreCache(cachePath, cache);
       }
     }
   }
 
-  return { scored, failures, aiRejected, scoringMode: apiKey ? model : 'heuristic-only' };
+  return { scored, failures, aiRejected, scoringMode, cachePath };
 }
+
+export const __testables = {
+  buildScoreCacheKey,
+  buildScoreSignature,
+};

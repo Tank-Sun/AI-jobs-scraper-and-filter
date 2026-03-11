@@ -10,7 +10,7 @@ import { collectJobs } from '../scraper/linkedin.js';
 import { dedupeJobs } from '../filter/dedupe.js';
 import { applyHardFilters } from '../filter/hardFilter.js';
 import { scoreJobs } from '../scoring/softScore.js';
-import { writeReports } from '../output/reports.js';
+import { ensureRunDirectory, readJsonFile, writeRawJobsSnapshot, writeReports } from '../output/reports.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..', '..');
@@ -32,44 +32,72 @@ async function ensureDirectories() {
   await mkdir(path.join(projectRoot, 'data'), { recursive: true });
 }
 
-async function main() {
-  await ensureDirectories();
-  loadEnv(projectRoot);
+function resolveRawJobsPath(args, runDir) {
+  if (args.input) {
+    return path.resolve(projectRoot, args.input);
+  }
+  if (runDir) {
+    return path.join(runDir, 'raw-jobs.json');
+  }
+  return path.resolve(projectRoot, 'reports/raw-jobs.json');
+}
 
-  const args = parseArgs(process.argv.slice(2));
-  const requirementsPath = path.resolve(projectRoot, args.requirements ?? 'data/requirements.md');
-  const resumePath = path.resolve(projectRoot, args.resume ?? 'data/resume.md');
-  const rawJobsPath = path.resolve(projectRoot, args.input ?? 'reports/raw-jobs.json');
-  const limit = Number(args.limit ?? 50);
-  const source = args.source ?? 'auto';
-  const cdpUrl = args.cdpUrl ?? process.env.PLAYWRIGHT_CDP_URL;
-
-  const normalization = await loadNormalizationConfig(path.join(projectRoot, 'config', 'normalization.json'));
-  const requirements = await parseRequirementsFile(requirementsPath);
-  const resume = await parseResumeFile(resumePath);
+async function runScrapePhase({ args, source, cdpUrl }) {
+  const scrapeLimit = Number(args.scrapeLimit ?? args.limit ?? 200);
+  const runContext = await ensureRunDirectory(projectRoot, args.runDir);
   const jobs = await collectJobs({
-    rawJobsPath,
-    limit: Number(args.scrapeLimit ?? 200),
+    rawJobsPath: path.join(runContext.runDir, 'raw-jobs.json'),
+    limit: scrapeLimit,
     cdpUrl,
     source,
   });
-  const dedupeResult = dedupeJobs(jobs, normalization);
 
+  const summary = {
+    mode: 'scrape',
+    jobsSeen: jobs.length,
+    source,
+    usedCdpUrl: Boolean(cdpUrl),
+  };
+
+  await writeRawJobsSnapshot({
+    runDir: runContext.runDir,
+    rawJobs: jobs,
+    summary,
+    generatedAt: runContext.generatedAt,
+  });
+
+  console.log(JSON.stringify({
+    ...summary,
+    rawJobsPath: path.join(runContext.runDir, 'raw-jobs.json'),
+    reportDir: runContext.runDir,
+    generatedAt: runContext.generatedAt,
+  }, null, 2));
+}
+
+async function runScorePhase({ args, requirements, resume, normalization, env }) {
+  const requestedRunDir = args.runDir ? path.resolve(projectRoot, args.runDir) : null;
+  const rawJobsPath = resolveRawJobsPath(args, requestedRunDir);
+  const runDir = requestedRunDir ?? path.dirname(rawJobsPath);
+  const generatedAt = new Date().toISOString();
+  const jobs = await readJsonFile(rawJobsPath);
+  const dedupeResult = dedupeJobs(jobs, normalization);
   const filteringResult = applyHardFilters(dedupeResult.uniqueJobs, requirements, normalization);
   const scoringResult = await scoreJobs({
     jobs: filteringResult.accepted,
     requirements,
     resume,
-    env: process.env,
+    env,
+    cachePath: path.join(runDir, 'scoring-cache.json'),
   });
 
+  const shortlistLimit = Number(args.limit ?? 50);
   const shortlist = [...scoringResult.scored]
     .sort((left, right) => right.totalScore - left.totalScore)
-    .slice(0, limit);
-
+    .slice(0, shortlistLimit);
   const allRejected = [...filteringResult.rejected, ...scoringResult.aiRejected];
 
   const summary = {
+    mode: 'score',
     jobsSeen: jobs.length,
     jobsAfterDedupe: dedupeResult.uniqueJobs.length,
     duplicatesRemoved: dedupeResult.duplicatesRemoved,
@@ -78,18 +106,20 @@ async function main() {
     aiRejected: scoringResult.aiRejected.length,
     shortlisted: shortlist.length,
     scoringFailures: scoringResult.failures.length,
-    source,
-    usedCdpUrl: Boolean(cdpUrl),
     scoringMode: scoringResult.scoringMode,
     resumePath: resume.path,
+    cachePath: scoringResult.cachePath,
+    rawJobsPath,
   };
 
   const reportResult = await writeReports({
-    projectRoot,
+    runDir,
+    generatedAt,
     shortlist,
     rejected: allRejected,
     scoringFailures: scoringResult.failures,
-    rawJobs: dedupeResult.uniqueJobs,
+    rawJobs: jobs,
+    processedJobs: dedupeResult.uniqueJobs,
     summary,
   });
 
@@ -98,6 +128,65 @@ async function main() {
     reportDir: reportResult.runDir,
     generatedAt: reportResult.generatedAt,
   }, null, 2));
+}
+
+async function main() {
+  await ensureDirectories();
+  loadEnv(projectRoot);
+
+  const args = parseArgs(process.argv.slice(2));
+  const mode = args.mode ?? 'run';
+  const source = args.source ?? 'auto';
+  const cdpUrl = args.cdpUrl ?? process.env.PLAYWRIGHT_CDP_URL;
+
+  if (mode === 'scrape') {
+    await runScrapePhase({ args, source, cdpUrl });
+    return;
+  }
+
+  const requirementsPath = path.resolve(projectRoot, args.requirements ?? 'data/requirements.md');
+  const resumePath = path.resolve(projectRoot, args.resume ?? 'data/resume.md');
+  const normalization = await loadNormalizationConfig(path.join(projectRoot, 'config', 'normalization.json'));
+  const requirements = await parseRequirementsFile(requirementsPath);
+  const resume = await parseResumeFile(resumePath);
+
+  if (mode === 'score') {
+    await runScorePhase({ args, requirements, resume, normalization, env: process.env });
+    return;
+  }
+
+  const runContext = await ensureRunDirectory(projectRoot, args.runDir);
+  const scrapeLimit = Number(args.scrapeLimit ?? 200);
+  const jobs = await collectJobs({
+    rawJobsPath: path.join(runContext.runDir, 'raw-jobs.json'),
+    limit: scrapeLimit,
+    cdpUrl,
+    source,
+  });
+
+  await writeRawJobsSnapshot({
+    runDir: runContext.runDir,
+    rawJobs: jobs,
+    summary: {
+      mode: 'run',
+      jobsSeen: jobs.length,
+      source,
+      usedCdpUrl: Boolean(cdpUrl),
+    },
+    generatedAt: runContext.generatedAt,
+  });
+
+  await runScorePhase({
+    args: {
+      ...args,
+      input: path.relative(projectRoot, path.join(runContext.runDir, 'raw-jobs.json')),
+      runDir: path.relative(projectRoot, runContext.runDir),
+    },
+    requirements,
+    resume,
+    normalization,
+    env: process.env,
+  });
 }
 
 main().catch((error) => {

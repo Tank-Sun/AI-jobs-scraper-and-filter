@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 function escapeCsv(value) {
@@ -25,6 +25,39 @@ function formatMountainTimestamp(date = new Date()) {
   const folderName = `${map.year}-${map.month}-${map.day}_${map.hour}-${map.minute}-${map.second}_MT`;
   const label = `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second} MT`;
   return { folderName, label };
+}
+
+async function fileExists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function ensureRunDirectory(projectRoot, requestedRunDir) {
+  const reportsDir = path.join(projectRoot, 'reports');
+  const timestamp = formatMountainTimestamp();
+  const runDir = requestedRunDir
+    ? path.resolve(projectRoot, requestedRunDir)
+    : path.join(reportsDir, timestamp.folderName);
+
+  await mkdir(runDir, { recursive: true });
+  return {
+    runDir,
+    generatedAt: timestamp.label,
+  };
+}
+
+export async function writeRawJobsSnapshot({ runDir, rawJobs, summary = {}, generatedAt }) {
+  await mkdir(runDir, { recursive: true });
+  await writeFile(path.join(runDir, 'raw-jobs.json'), JSON.stringify(rawJobs, null, 2), 'utf8');
+  await writeFile(
+    path.join(runDir, 'run-summary.json'),
+    JSON.stringify({ ...summary, generatedAt, reportDir: runDir }, null, 2),
+    'utf8'
+  );
 }
 
 function toCsvRows(shortlist) {
@@ -101,29 +134,35 @@ function toScoringFailuresMarkdown(scoringFailures, runLabel) {
   return `# Scoring Failures\n\n- Generated: ${runLabel}\n\n${body}`;
 }
 
-export async function writeReports({ projectRoot, shortlist, rejected, scoringFailures, rawJobs, summary }) {
-  const reportsDir = path.join(projectRoot, 'reports');
-  const timestamp = formatMountainTimestamp();
-  const runDir = path.join(reportsDir, timestamp.folderName);
+export async function readJsonFile(filePath) {
+  const raw = await readFile(filePath, 'utf8');
+  return JSON.parse(raw.replace(/^\uFEFF/, ''));
+}
+
+export async function writeReports({ runDir, generatedAt, shortlist, rejected, scoringFailures, rawJobs, processedJobs, summary }) {
   await mkdir(runDir, { recursive: true });
 
-  await writeFile(path.join(runDir, 'raw-jobs.json'), JSON.stringify(rawJobs, null, 2), 'utf8');
+  const rawJobsPath = path.join(runDir, 'raw-jobs.json');
+  if (rawJobs && !(await fileExists(rawJobsPath))) {
+    await writeFile(rawJobsPath, JSON.stringify(rawJobs, null, 2), 'utf8');
+  }
+
+  if (processedJobs) {
+    await writeFile(path.join(runDir, 'processed-jobs.json'), JSON.stringify(processedJobs, null, 2), 'utf8');
+  }
+
   await writeFile(path.join(runDir, 'shortlist.csv'), toCsvRows(shortlist), 'utf8');
-  await writeFile(path.join(runDir, 'shortlist.md'), toShortlistMarkdown(shortlist, timestamp.label), 'utf8');
-  await writeFile(path.join(runDir, 'rejected.md'), toRejectedMarkdown(rejected, timestamp.label), 'utf8');
-  await writeFile(path.join(runDir, 'scoring-failures.md'), toScoringFailuresMarkdown(scoringFailures, timestamp.label), 'utf8');
+  await writeFile(path.join(runDir, 'shortlist.md'), toShortlistMarkdown(shortlist, generatedAt), 'utf8');
+  await writeFile(path.join(runDir, 'rejected.md'), toRejectedMarkdown(rejected, generatedAt), 'utf8');
+  await writeFile(path.join(runDir, 'scoring-failures.md'), toScoringFailuresMarkdown(scoringFailures, generatedAt), 'utf8');
   await writeFile(
     path.join(runDir, 'run-summary.json'),
-    JSON.stringify({
-      ...summary,
-      generatedAt: timestamp.label,
-      reportDir: runDir,
-    }, null, 2),
+    JSON.stringify({ ...summary, generatedAt, reportDir: runDir }, null, 2),
     'utf8'
   );
 
   return {
     runDir,
-    generatedAt: timestamp.label,
+    generatedAt,
   };
 }
