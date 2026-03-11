@@ -67,8 +67,8 @@ test('applyHardFilters accepts deterministic matches and keeps AI signals for am
   assert.match(result.accepted[0].aiSignals.join(','), /title_not_in_preferred_lists/);
 });
 
-test('applyHardFilters keeps company-size mismatches as AI signals instead of hard rejection', () => {
-  const jobs = [
+test('applyHardFilters rejects explicit company-size mismatches but keeps missing company size as ambiguity', () => {
+  const oversized = [
     {
       title: 'Software Engineer',
       company: 'BigCo',
@@ -81,10 +81,58 @@ test('applyHardFilters keeps company-size mismatches as AI signals instead of ha
     },
   ];
 
+  const oversizedResult = applyHardFilters(oversized, requirements, normalization);
+  assert.equal(oversizedResult.accepted.length, 0);
+  assert.equal(oversizedResult.rejected.length, 1);
+  assert.match(oversizedResult.rejected[0].reasons.map((item) => item.field).join(','), /companySize/);
+
+  const missing = [
+    {
+      title: 'Software Engineer',
+      company: 'UnknownCo',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'No sponsorship',
+      companySize: '',
+      description: 'Typescript React product role',
+      jobUrl: 'https://example.com/2b',
+    },
+  ];
+
+  const missingResult = applyHardFilters(missing, requirements, normalization);
+  assert.equal(missingResult.accepted.length, 1);
+  assert.equal(missingResult.rejected.length, 0);
+  assert.match(missingResult.accepted[0].aiSignals.join(','), /missing_company_size_bucket/);
+});
+
+test('applyHardFilters rejects titles that are clearly outside the target experience range', () => {
+  const jobs = [
+    {
+      title: 'Staff Software Engineer',
+      company: 'Acme',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'TN eligible',
+      companySize: '51-200',
+      description: 'Typescript React Node.js role',
+      jobUrl: 'https://example.com/staff',
+    },
+    {
+      title: 'Junior Software Engineer',
+      company: 'Acme',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'TN eligible',
+      companySize: '51-200',
+      description: 'Typescript React Node.js role',
+      jobUrl: 'https://example.com/junior',
+    },
+  ];
+
   const result = applyHardFilters(jobs, requirements, normalization);
-  assert.equal(result.accepted.length, 1);
-  assert.equal(result.rejected.length, 0);
-  assert.match(result.accepted[0].aiSignals.join(','), /company_size_outside_preferred_range/);
+  assert.equal(result.accepted.length, 0);
+  assert.equal(result.rejected.length, 2);
+  assert.match(result.rejected.map((job) => job.reasons.map((item) => item.field).join(',')).join(','), /seniority/);
 });
 
 test('applyHardFilters rejects explicit hard filter mismatches', () => {

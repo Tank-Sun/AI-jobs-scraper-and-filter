@@ -6,44 +6,325 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SCORE_CONCURRENCY = 4;
+const SCORING_SIGNATURE_VERSION = '2026-03-11-score-only-ai-product-v7';
+const AI_HEURISTIC_BLEND_RATIO = 0.4;
+
+const PRODUCT_ENGINEERING_TERMS = [
+  'product',
+  'product engineering',
+  'customer',
+  'customer-facing',
+  'user-facing',
+  'user facing',
+  'full stack',
+  'full-stack',
+  'backend',
+  'api',
+  'node',
+  'node.js',
+  'typescript',
+  'javascript',
+  'react',
+  'frontend',
+  'front-end',
+  'web application',
+  'design systems',
+  'developer experience',
+  'devex',
+  'platform engineering',
+  'end-to-end',
+  'ship features',
+  'product and design decisions',
+  'ownership',
+  'ai-powered',
+  'ai powered',
+  'copilot',
+  'assistant',
+];
+
+const FULL_STACK_TERMS = [
+  'full stack',
+  'full-stack',
+  'end-to-end',
+  'across the stack',
+  'frontend and backend',
+  'front-end and back-end',
+];
+
+const FITTED_BACKEND_TERMS = [
+  'backend',
+  'api',
+  'node',
+  'node.js',
+  'typescript',
+  'javascript',
+  'graphql',
+  'full stack',
+  'full-stack',
+];
+
+const FRONTEND_TERMS = [
+  'frontend',
+  'front-end',
+  'react',
+  'next.js',
+  'design systems',
+  'ui',
+  'ux',
+  'responsive',
+];
+
+const DEVEX_POSITIVE_TERMS = [
+  'developer productivity',
+  'developer experience',
+  'devex',
+  'backstage',
+  'internal developer portal',
+  'developer portal',
+  'improve developer workflows',
+];
+
+const INTERNAL_TOOLS_NEGATIVE_TERMS = [
+  'tools team',
+  'internal tools',
+  'game tools',
+  'tooling for artists',
+  'tooling for designers',
+  'editor tooling',
+];
+
+const AVOID_DIRECTION_TERMS = [
+  'java',
+  'spring',
+  '.net',
+  'c#',
+  'c++',
+  'rust',
+  'embedded',
+  'sap',
+  'netsuite',
+  'dynamics',
+  'telecom',
+  'wireless core',
+  'hpc',
+  'gpu',
+  'operations research',
+  'observability',
+  'networking',
+];
+
+const NATIVE_MOBILE_TERMS = [
+  'android',
+  'ios',
+  'kotlin',
+  'swift',
+  'jetpack compose',
+  'android sdk',
+  'objective-c',
+  'uikit',
+  'xcode',
+  'mobile developer',
+  'mobile engineer',
+  'native mobile',
+];
+
+const REACT_NATIVE_TERMS = [
+  'react native',
+  'expo',
+];
+
+const CONSULTING_TERMS = [
+  'consulting',
+  'consultant',
+  'client engagement',
+  'professional services',
+  'implementation partner',
+  'staffing',
+  'recruiting agency',
+  'bodyshop',
+  'contract for client',
+];
+
+const EVERGREEN_TERMS = [
+  'future opportunities',
+  'future opportunity',
+  'evergreen',
+  'talent pool',
+  'pipeline role',
+];
+
+const AI_INFRA_TERMS = [
+  'ml platform',
+  'model serving',
+  'distributed systems',
+  'data pipeline',
+  'streaming',
+  'infrastructure',
+  'platform team',
+  'backend services',
+  'networking',
+  'observability',
+];
 
 function clampScore(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function jobText(job) {
+  return `${job.title ?? ''} ${job.company ?? ''} ${job.description ?? ''}`.toLowerCase();
+}
+
+function ratioOfTerms(text, terms) {
+  if (terms.length === 0) {
+    return 0;
+  }
+  const hits = terms.filter((term) => text.includes(term)).length;
+  return hits / terms.length;
+}
+
+function hasReactNativeSignal(job) {
+  return ratioOfTerms(jobText(job), REACT_NATIVE_TERMS) > 0;
+}
+
+function nativeMobileRatio(job) {
+  const text = jobText(job);
+  const baseRatio = ratioOfTerms(text, NATIVE_MOBILE_TERMS);
+  if (hasReactNativeSignal(job)) {
+    return Math.max(0, baseRatio - 0.08);
+  }
+  return baseRatio;
+}
+
 function overlapScore(haystack, needles) {
-  const text = `${haystack.title ?? ''} ${haystack.description ?? ''}`.toLowerCase();
+  const text = jobText(haystack);
   const hits = needles.filter((needle) => text.includes(needle)).length;
   return needles.length === 0 ? 0 : hits / needles.length;
 }
 
 function skillCoverageScore(job, requirements, resume) {
+  const text = jobText(job);
   const niceToHaveRatio = overlapScore(job, requirements.nice_to_have_skills);
   const resumeRatio = resume.skills.length === 0 ? 0 : overlapScore(job, resume.skills.slice(0, 80));
   const mustHaveCoverage = (job.mustHaveSkillMatches?.length ?? 0) / Math.max(requirements.must_have_skills.length, 1);
-  return clampScore((niceToHaveRatio * 0.4 + resumeRatio * 0.3 + mustHaveCoverage * 0.3) * 100);
+  const fullStackBoost = fullStackSignal(job) * 18;
+  const backendBoost = fittedBackendSignal(job) * 14;
+  const frontendBoost = frontendSignal(job) * 6;
+  const negativePenalty = Math.min((job.negativeSkillMatches?.length ?? 0) * 18, 45);
+  const avoidRatioPenalty = ratioOfTerms(text, AVOID_DIRECTION_TERMS) * 25;
+  const nativeMobilePenalty = nativeMobileRatio(job) * 55;
+  const reactNativePenalty = hasReactNativeSignal(job) ? 8 : 0;
+  const missingCorePenalty = mustHaveCoverage === 0 && !hasAiProductSignal(job) ? 15 : 0;
+  return clampScore((mustHaveCoverage * 0.55 + niceToHaveRatio * 0.15 + resumeRatio * 0.3) * 100 + fullStackBoost + backendBoost + frontendBoost - negativePenalty - avoidRatioPenalty - nativeMobilePenalty - reactNativePenalty - missingCorePenalty);
 }
 
 function seniorityScore(job, requirements) {
   const normalizedTitle = (job.title ?? '').toLowerCase();
+  const explicitlyJunior = ['intern', 'internship', 'junior', 'new grad', 'new graduate', 'entry level', 'entry-level']
+    .some((term) => normalizedTitle.includes(term));
+  if (explicitlyJunior) {
+    return 20;
+  }
+
+  const explicitlyTooSenior = ['staff', 'principal', 'distinguished', 'director', 'manager', 'lead architect']
+    .some((term) => normalizedTitle.includes(term));
+  if (explicitlyTooSenior) {
+    return normalizedTitle.includes('staff') || normalizedTitle.includes('principal') ? 35 : 25;
+  }
+
+  const preferredLevels = ['mid', 'mid-level', 'intermediate', 'senior', 'senior software engineer', 'software engineer ii', 'software engineer iii'];
+  if (preferredLevels.some((term) => normalizedTitle.includes(term))) {
+    return normalizedTitle.includes('senior') ? 88 : 82;
+  }
+
   if (requirements.experience_level.some((level) => normalizedTitle.includes(level.replace('-level', '').trim()))) {
-    return 85;
+    return 84;
   }
-  if (normalizedTitle.includes('staff') || normalizedTitle.includes('principal')) {
-    return 60;
-  }
-  return 70;
+
+  return 68;
+}
+
+function hasAiProductSignal(job) {
+  const text = jobText(job);
+  const aiTerms = ['ai product', 'ai-powered', 'ai powered', 'artificial intelligence', 'generative ai', 'genai', 'llm', 'copilot', 'assistant', 'machine learning'];
+  return aiTerms.some((term) => text.includes(term));
+}
+
+function hasDevexSignal(job) {
+  return ratioOfTerms(jobText(job), DEVEX_POSITIVE_TERMS) > 0;
+}
+
+function fullStackSignal(job) {
+  return ratioOfTerms(jobText(job), FULL_STACK_TERMS);
+}
+
+function fittedBackendSignal(job) {
+  const text = jobText(job);
+  const base = ratioOfTerms(text, FITTED_BACKEND_TERMS);
+  const hasWrongBackend = ['java', 'spring', '.net', 'c#', 'c++', 'kotlin', 'ruby'].some((term) => text.includes(term));
+  return hasWrongBackend ? Math.max(0, base - 0.18) : base;
+}
+
+function frontendSignal(job) {
+  return ratioOfTerms(jobText(job), FRONTEND_TERMS);
+}
+
+function hasInternalToolsSignal(job) {
+  const text = jobText(job);
+  return text.includes('tools') || ratioOfTerms(text, INTERNAL_TOOLS_NEGATIVE_TERMS) > 0;
+}
+
+function hasStrongProductSignal(job) {
+  const text = jobText(job);
+  const productTerms = ['product engineering', 'product and design decisions', 'ship features end-to-end', 'end-to-end', 'user-facing', 'customer-facing', 'product specs'];
+  return productTerms.some((term) => text.includes(term));
 }
 
 function companyQualityScore(job, requirements) {
-  const text = `${job.company ?? ''} ${job.description ?? ''}`.toLowerCase();
+  const text = jobText(job);
+  if (ratioOfTerms(text, CONSULTING_TERMS) > 0) {
+    return 20;
+  }
+  if (ratioOfTerms(text, EVERGREEN_TERMS) > 0) {
+    return 35;
+  }
+  if (hasInternalToolsSignal(job) && !hasDevexSignal(job)) {
+    return 40;
+  }
+  if (hasAiProductSignal(job)) {
+    return 92;
+  }
+  if (hasStrongProductSignal(job) || fullStackSignal(job) > 0.12) {
+    return 84;
+  }
+  if (ratioOfTerms(text, AI_INFRA_TERMS) > 0.18) {
+    return 45;
+  }
   return clampScore(requirements.industry_preferences.some((preference) => text.includes(preference)) ? 80 : 55);
 }
 
 function riskScore(job) {
-  const signalPenalty = Math.min((job.aiSignals?.length ?? 0) * 8, 25);
-  const negativePenalty = Math.min((job.negativeSkillMatches?.length ?? 0) * 12, 30);
-  return clampScore(95 - signalPenalty - negativePenalty);
+  const text = jobText(job);
+  const signalPenaltyByType = {
+    missing_location_bucket: 2,
+    missing_company_size_bucket: 0,
+    company_size_outside_preferred_range: 4,
+    missing_employment_type_bucket: 0,
+    missing_visa_bucket: 0,
+    title_not_in_preferred_lists: 8,
+    must_have_skills_not_fully_confirmed: 6,
+    negative_skill_overlap: 0,
+  };
+  const signalPenalty = Math.min(
+    (job.aiSignals ?? []).reduce((total, signal) => total + (signalPenaltyByType[signal] ?? 3), 0),
+    24
+  );
+  const negativePenalty = Math.min((job.negativeSkillMatches?.length ?? 0) * 12, 36);
+  const consultingPenalty = ratioOfTerms(text, CONSULTING_TERMS) > 0 ? 22 : 0;
+  const evergreenPenalty = ratioOfTerms(text, EVERGREEN_TERMS) > 0 ? 12 : 0;
+  const infraPenalty = ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 && !hasAiProductSignal(job) ? 10 : 0;
+  const nativeMobilePenalty = nativeMobileRatio(job) * 42;
+  const reactNativePenalty = hasReactNativeSignal(job) ? 6 : 0;
+  return clampScore(95 - signalPenalty - negativePenalty - consultingPenalty - evergreenPenalty - infraPenalty - nativeMobilePenalty - reactNativePenalty);
 }
 
 function calculateWeightedTotalScore(breakdown, weights) {
@@ -59,14 +340,65 @@ function calculateWeightedTotalScore(breakdown, weights) {
   );
 }
 
+function responsibilityAlignmentScore(job) {
+  const text = jobText(job);
+  const positiveRatio = ratioOfTerms(text, PRODUCT_ENGINEERING_TERMS);
+  const avoidRatio = ratioOfTerms(text, AVOID_DIRECTION_TERMS);
+  const consultingPenalty = ratioOfTerms(text, CONSULTING_TERMS) > 0 ? 20 : 0;
+  const infraPenalty = ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 && !hasAiProductSignal(job) ? 18 : 0;
+  const internalToolsPenalty = hasInternalToolsSignal(job) && !hasDevexSignal(job) ? 18 : 0;
+  const nativeMobilePenalty = nativeMobileRatio(job) * 55;
+  const reactNativePenalty = hasReactNativeSignal(job) ? 8 : 0;
+  const aiBoost = hasAiProductSignal(job) ? 12 : 0;
+  const devexBoost = hasDevexSignal(job) ? 10 : 0;
+  const productBoost = hasStrongProductSignal(job) ? 16 : 0;
+  const fullStackBoost = fullStackSignal(job) * 18;
+  const backendBoost = fittedBackendSignal(job) * 14;
+  const frontendBoost = frontendSignal(job) * 5;
+  return clampScore(28 + positiveRatio * 66 - avoidRatio * 45 - consultingPenalty - infraPenalty - internalToolsPenalty - nativeMobilePenalty - reactNativePenalty + aiBoost + devexBoost + productBoost + fullStackBoost + backendBoost + frontendBoost);
+}
+
+function titleAlignmentScore(job, requirements) {
+  const normalizedTitle = (job.title ?? '').toLowerCase();
+  let score = clampScore(overlapScore(job, requirements.all_titles) * 100);
+
+  if (normalizedTitle.includes('product engineering')) {
+    score += 18;
+  }
+  if (normalizedTitle.includes('fullstack') || normalizedTitle.includes('full stack')) {
+    score += 16;
+  }
+  if (normalizedTitle.includes('backend')) {
+    score += normalizedTitle.includes('java') || normalizedTitle.includes('.net') || normalizedTitle.includes('c++') ? -8 : 8;
+  }
+  if (normalizedTitle.includes('frontend')) {
+    score += 8;
+  }
+  if (normalizedTitle.includes('developer productivity') || normalizedTitle.includes('developer experience')) {
+    score += 14;
+  }
+  if (normalizedTitle.includes('staff') || normalizedTitle.includes('principal')) {
+    score -= 22;
+  }
+  if (normalizedTitle.includes('android') || normalizedTitle.includes('ios') || normalizedTitle.includes('mobile')) {
+    score -= hasReactNativeSignal(job) ? 8 : 24;
+  }
+  if (normalizedTitle.includes('java') || normalizedTitle.includes('.net') || normalizedTitle.includes('c++')) {
+    score -= 18;
+  }
+
+  return clampScore(score);
+}
+
 function heuristicScore(job, requirements, resume) {
   const weights = requirements.weights;
+  const growthBase = (job.description ?? '').toLowerCase().includes('growth') ? 80 : 45;
   const breakdown = {
     skills: skillCoverageScore(job, requirements, resume),
-    responsibilities: clampScore(Math.min(1, ((job.description ?? '').length || 0) / 4000) * 100),
+    responsibilities: responsibilityAlignmentScore(job),
     company_quality: companyQualityScore(job, requirements),
-    growth: clampScore((job.description ?? '').toLowerCase().includes('growth') ? 80 : 45),
-    title: clampScore(overlapScore(job, requirements.all_titles) * 100),
+    growth: clampScore(hasAiProductSignal(job) ? Math.max(growthBase, 90) : hasStrongProductSignal(job) ? Math.max(growthBase, 80) : growthBase),
+    title: titleAlignmentScore(job, requirements),
     seniority: seniorityScore(job, requirements),
     risk: riskScore(job),
   };
@@ -96,22 +428,28 @@ function buildGeminiPrompt(job, requirements, resume) {
     '- Best fit: product engineering, frontend-heavy full-stack roles, platform/product engineering, developer experience, and AI-enabled application work.',
     '- Strongest stack: TypeScript, JavaScript, React, Node.js.',
     '- Good signs: user-facing product ownership, modern web engineering, AI features tied to real product value, cross-functional execution, and strong engineering quality.',
+    '- Extra-strong positive: companies building AI products or roles shipping AI-powered features to users, especially when the work is still product/full-stack/frontend oriented.',
     '- Bad signs: titles or work that are mainly product owner, project/program manager, QA, IT admin, support, consulting bodyshop work, low-level systems, embedded, native mobile, or backend stacks centered on Java/Spring or .NET unless the rest of the role is still clearly aligned.',
     '',
     'Decision policy:',
     '- Be selective. A role should only be shortlisted if there is positive evidence that it is a genuinely strong fit, not merely acceptable.',
     '- Prefer actual day-to-day work over a flattering title. If the title sounds good but the responsibilities are off-target, reject it.',
     '- Prefer evidence from the job description and metadata. Do not invent missing facts.',
-    '- Missing company size is fine. Company size is only a soft preference and should not by itself cause rejection.',
+    '- Missing company size is fine. Company size is a filtering preference, not a score bonus. Jobs within the allowed size range should not get extra credit for simply being larger.',
+    '- Missing employment type or visa policy should not by itself cause rejection or lower fit. Only explicit incompatible values should count against the role.',
+    '- Missing explicit mention of TypeScript, React, or Node.js should be treated as uncertainty, not as an automatic rejection, if the title and responsibilities still point to strong product/full-stack/frontend work.',
+    '- Many postings mention broad or secondary tech stacks. Do not reject merely because avoid-list technologies appear somewhere in the posting. Treat them as strong negatives only when the core responsibilities or must-have requirements are centered on them.',
     '- If company size is outside the preferred range but the role is otherwise strong, that should usually lower enthusiasm rather than force rejection.',
+    '- Strong positive signal if the company is building AI products or the role clearly ships AI-powered features to users. Prefer these when the rest of the role is also a fit.',
+    '- Do not give the same boost to AI strategy, AI consulting, or backend/infra/platform work that is detached from product-facing engineering.',
     '- If title fit, core stack fit, and day-to-day work are all weak or ambiguous, reject rather than giving the benefit of the doubt.',
     '- Treat evergreen or generic future-opportunity postings more skeptically unless the role still looks unusually aligned.',
-    '- Use aiSignals as hints about uncertainty or possible concerns, but do not blindly mirror them.',
+    '- Use aiSignals as weak hints about uncertainty or possible concerns. Missing metadata and unconfirmed skills are not disqualifiers by themselves.',
     '',
     'Scoring guidance:',
-    "- skills: how well the role matches the candidate's actual strengths and required stack.",
-    '- responsibilities: how well the actual work matches product/full-stack/frontend/AI application engineering goals.',
-    '- company_quality: domain and company context fit, treated as secondary to the role itself.',
+    "- skills: how well the role matches the candidate's actual strengths and primary required stack, not every incidental technology mentioned in the posting.",
+    '- responsibilities: how well the actual work matches product/full-stack/frontend/AI application engineering goals. Give extra credit for shipping AI-powered product features.',
+    '- company_quality: domain and company context fit, treated as secondary to the role itself. Give extra credit to AI product companies, but not just any AI-adjacent consulting or infrastructure work.',
     '- title: how well the title aligns with the target or acceptable titles.',
     '- seniority: whether the expected level is a good fit for mid-level to senior roles.',
     '- growth: whether the role appears to offer strong ownership, scope, and learning potential.',
@@ -202,6 +540,7 @@ function buildScoreSignature(job, model) {
     .update(
       JSON.stringify({
         model,
+        scoringVersion: SCORING_SIGNATURE_VERSION,
         title: job.title,
         company: job.company,
         location: job.location,
@@ -258,6 +597,30 @@ function normalizeGeminiScoreValue(value) {
 
   const normalized = parsed >= 0 && parsed <= 10 ? parsed * 10 : parsed;
   return clampScore(normalized);
+}
+
+function blendBreakdowns(aiBreakdown, heuristicBreakdown) {
+  return {
+    skills: clampScore(aiBreakdown.skills * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.skills * (1 - AI_HEURISTIC_BLEND_RATIO)),
+    responsibilities: clampScore(aiBreakdown.responsibilities * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.responsibilities * (1 - AI_HEURISTIC_BLEND_RATIO)),
+    company_quality: clampScore(aiBreakdown.company_quality * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.company_quality * (1 - AI_HEURISTIC_BLEND_RATIO)),
+    title: clampScore(aiBreakdown.title * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.title * (1 - AI_HEURISTIC_BLEND_RATIO)),
+    seniority: clampScore(aiBreakdown.seniority * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.seniority * (1 - AI_HEURISTIC_BLEND_RATIO)),
+    growth: clampScore(aiBreakdown.growth * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.growth * (1 - AI_HEURISTIC_BLEND_RATIO)),
+    risk: clampScore(aiBreakdown.risk * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.risk * (1 - AI_HEURISTIC_BLEND_RATIO)),
+  };
+}
+
+function mergeAiAndHeuristicScores(aiResult, heuristicResult, weights) {
+  const breakdown = blendBreakdowns(aiResult.breakdown, heuristicResult.breakdown);
+  return {
+    ...aiResult,
+    totalScore: calculateWeightedTotalScore(breakdown, weights),
+    breakdown,
+    heuristicTotalScore: heuristicResult.totalScore,
+    aiTotalScore: aiResult.totalScore,
+    scoringSource: 'gemini+heuristic',
+  };
 }
 
 function normalizeGeminiResult(parsed, weights) {
@@ -363,34 +726,28 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
   }
 
   try {
+    const heuristic = heuristicScore(job, requirements, resume);
     const result = apiKey
-      ? await callGemini({ apiKey, model, job, requirements, resume })
-      : heuristicScore(job, requirements, resume);
+      ? mergeAiAndHeuristicScores(await callGemini({ apiKey, model, job, requirements, resume }), heuristic, requirements.weights)
+      : heuristic;
 
-    const cacheStatus = result.decision === 'reject' ? 'rejected' : 'scored';
-    const reasons = result.decision === 'reject'
-      ? [{ field: 'ai', message: result.rejectReason || result.whyRecommended }]
-      : undefined;
+    const scoredResult = {
+      ...result,
+      modelDecision: result.decision,
+      decision: 'scored',
+    };
 
     cache.entries[cacheKey] = buildCacheEntry({
       key: cacheKey,
       signature,
       mode: scoringMode,
-      status: cacheStatus,
-      result,
-      reasons,
+      status: 'scored',
+      result: scoredResult,
     });
-
-    if (cacheStatus === 'rejected') {
-      return {
-        type: 'rejected',
-        value: { ...job, ...result, reasons },
-      };
-    }
 
     return {
       type: 'scored',
-      value: { ...job, ...result },
+      value: { ...job, ...scoredResult },
     };
   } catch (error) {
     try {
@@ -401,32 +758,26 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
         scoringFailureMessage: error instanceof Error ? error.message : String(error),
       };
 
-      if (fallback.decision === 'reject') {
-        const reasons = [{ field: 'fallback', message: fallback.rejectReason || fallback.whyRecommended }];
-        cache.entries[cacheKey] = buildCacheEntry({
-          key: cacheKey,
-          signature,
-          mode: scoringMode,
-          status: 'rejected',
-          result: fallback,
-          reasons,
-        });
-        return {
-          type: 'rejected',
-          value: { ...enriched, reasons },
-        };
-      }
+      const scoredFallback = {
+        ...fallback,
+        modelDecision: fallback.decision,
+        decision: 'scored',
+      };
+      const enrichedScored = {
+        ...enriched,
+        ...scoredFallback,
+      };
 
       cache.entries[cacheKey] = buildCacheEntry({
         key: cacheKey,
         signature,
         mode: scoringMode,
         status: 'scored',
-        result: fallback,
+        result: scoredFallback,
       });
       return {
         type: 'scored',
-        value: enriched,
+        value: enrichedScored,
       };
     } catch (fallbackError) {
       const failure = {
@@ -504,8 +855,6 @@ export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) 
   for (const result of results) {
     if (result.type === 'scored') {
       scored.push(result.value);
-    } else if (result.type === 'rejected') {
-      aiRejected.push(result.value);
     } else if (result.type === 'failed') {
       failures.push(result.value);
     }
@@ -515,11 +864,18 @@ export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) 
 }
 
 export const __testables = {
+  buildGeminiPrompt,
   buildScoreCacheKey,
   buildScoreSignature,
   calculateWeightedTotalScore,
+  hasAiProductSignal,
+  hasDevexSignal,
+  hasStrongProductSignal,
+  heuristicScore,
+  mergeAiAndHeuristicScores,
   mapWithConcurrency,
   normalizeGeminiResult,
   normalizeGeminiScoreValue,
   resolveScoreConcurrency,
+  riskScore,
 };

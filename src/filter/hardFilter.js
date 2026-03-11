@@ -8,6 +8,10 @@ function pushReason(reasons, field, message) {
   reasons.push({ field, message });
 }
 
+function matchesAny(text, terms) {
+  return terms.some((term) => text.includes(term));
+}
+
 export function applyHardFilters(jobs, requirements, normalization) {
   const accepted = [];
   const rejected = [];
@@ -26,7 +30,7 @@ export function applyHardFilters(jobs, requirements, normalization) {
     if (!normalized.companySizeBucket) {
       aiSignals.push('missing_company_size_bucket');
     } else if (!requirements.must_have_company_size.includes(normalized.companySizeBucket)) {
-      aiSignals.push('company_size_outside_preferred_range');
+      pushReason(reasons, 'companySize', `Company size ${normalized.companySizeBucket} is not allowed`);
     }
 
     if (!normalized.employmentTypeBucket) {
@@ -43,6 +47,16 @@ export function applyHardFilters(jobs, requirements, normalization) {
 
     if (includesAny(normalized.normalizedDescription, requirements.red_flags)) {
       pushReason(reasons, 'redFlags', 'Description matched a red flag');
+    }
+
+    const explicitlyTooJunior = matchesAny(normalized.normalizedTitle, ['intern', 'internship', 'junior', 'new grad', 'new graduate', 'entry level', 'entry-level']);
+    if (explicitlyTooJunior) {
+      pushReason(reasons, 'seniority', 'Title indicates an entry-level role');
+    }
+
+    const explicitlyTooSenior = matchesAny(normalized.normalizedTitle, ['staff', 'principal', 'distinguished']);
+    if (explicitlyTooSenior) {
+      pushReason(reasons, 'seniority', 'Title indicates a role above the target experience range');
     }
 
     if (requirements.all_titles.length > 0 && !includesAny(normalized.normalizedTitle, requirements.all_titles)) {
