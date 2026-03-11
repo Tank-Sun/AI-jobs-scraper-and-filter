@@ -27,6 +27,19 @@ function parseArgs(argv) {
   return args;
 }
 
+function parseScrapeLimit(value) {
+  if (value == null) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid scrape limit: ${value}`);
+  }
+
+  return parsed;
+}
+
 async function ensureDirectories() {
   await mkdir(path.join(projectRoot, 'reports'), { recursive: true });
   await mkdir(path.join(projectRoot, 'data'), { recursive: true });
@@ -43,7 +56,7 @@ function resolveRawJobsPath(args, runDir) {
 }
 
 async function runScrapePhase({ args, source, cdpUrl }) {
-  const scrapeLimit = Number(args.scrapeLimit ?? args.limit ?? 200);
+  const scrapeLimit = parseScrapeLimit(args.scrapeLimit);
   const runContext = await ensureRunDirectory(projectRoot, args.runDir);
   const jobs = await collectJobs({
     rawJobsPath: path.join(runContext.runDir, 'raw-jobs.json'),
@@ -156,7 +169,7 @@ async function main() {
   }
 
   const runContext = await ensureRunDirectory(projectRoot, args.runDir);
-  const scrapeLimit = Number(args.scrapeLimit ?? 200);
+  const scrapeLimit = parseScrapeLimit(args.scrapeLimit);
   const jobs = await collectJobs({
     rawJobsPath: path.join(runContext.runDir, 'raw-jobs.json'),
     limit: scrapeLimit,
