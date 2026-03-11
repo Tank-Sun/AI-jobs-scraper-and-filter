@@ -65,6 +65,13 @@ function buildLinkedInJobUrl(jobId) {
   return `https://www.linkedin.com/jobs/view/${jobId}/`;
 }
 
+function buildSearchResultsPageUrl(urlValue, start) {
+  const url = new URL(urlValue);
+  url.searchParams.delete('currentJobId');
+  url.searchParams.set('start', String(start));
+  return url.toString();
+}
+
 function getCurrentJobIdFromUrl(urlValue) {
   try {
     const url = new URL(urlValue);
@@ -110,17 +117,25 @@ async function collectJobLinks(page, limit) {
 
     await card.scrollIntoViewIfNeeded().catch(() => {});
 
-    const hrefs = await card
-      .locator('a[href]')
-      .evaluateAll((elements) => elements.map((element) => element.getAttribute('href')).filter(Boolean))
-      .catch(() => []);
+    const previousJobId = getCurrentJobIdFromUrl(page.url());
+    await card.click({ timeout: 10000 }).catch(() => {});
 
-    let jobId = hrefs.map(extractJobIdFromHref).find(Boolean) ?? null;
+    let jobId = null;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await page.waitForTimeout(250);
+      jobId = getCurrentJobIdFromUrl(page.url());
+      if (jobId && jobId !== previousJobId) {
+        break;
+      }
+    }
 
     if (!jobId) {
-      await card.click({ timeout: 10000 }).catch(() => {});
-      await page.waitForTimeout(1000);
-      jobId = getCurrentJobIdFromUrl(page.url());
+      const hrefs = await card
+        .locator('a[href]')
+        .evaluateAll((elements) => elements.map((element) => element.getAttribute('href')).filter(Boolean))
+        .catch(() => []);
+
+      jobId = hrefs.map(extractJobIdFromHref).find(Boolean) ?? null;
     }
 
     if (!jobId || seen.has(jobId)) {
@@ -132,6 +147,50 @@ async function collectJobLinks(page, limit) {
     if (links.length >= limit) {
       break;
     }
+  }
+
+  return links;
+}
+
+async function collectJobLinksAcrossPages(page, limit) {
+  const links = [];
+  const seen = new Set();
+  let start = Number(new URL(page.url()).searchParams.get('start') ?? '0');
+  let stagnantPages = 0;
+
+  while (links.length < limit && stagnantPages < 2) {
+    await autoScrollJobsList(page);
+    const pageLinks = await collectJobLinks(page, limit - links.length);
+    let addedThisPage = 0;
+
+    for (const jobUrl of pageLinks) {
+      if (seen.has(jobUrl)) {
+        continue;
+      }
+
+      seen.add(jobUrl);
+      links.push(jobUrl);
+      addedThisPage += 1;
+
+      if (links.length >= limit) {
+        break;
+      }
+    }
+
+    if (links.length >= limit) {
+      break;
+    }
+
+    stagnantPages = addedThisPage === 0 ? stagnantPages + 1 : 0;
+    start += 25;
+
+    const nextPageUrl = buildSearchResultsPageUrl(page.url(), start);
+    if (nextPageUrl === page.url()) {
+      break;
+    }
+
+    await page.goto(nextPageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(1800);
   }
 
   return links;
@@ -407,9 +466,7 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit }) {
 
     const searchPage = await findJobsPage(context);
     await ensureLinkedInJobsPage(searchPage);
-    await autoScrollJobsList(searchPage);
-
-    const jobLinks = await collectJobLinks(searchPage, limit);
+    const jobLinks = await collectJobLinksAcrossPages(searchPage, limit);
     if (jobLinks.length === 0) {
       throw new Error('No LinkedIn job links were found on the current page.');
     }
@@ -449,6 +506,7 @@ export async function collectJobs({ rawJobsPath, limit = 200, cdpUrl, source = '
 }
 
 export const __testables = {
+  buildSearchResultsPageUrl,
   parseHeaderFromMainText,
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
