@@ -15,6 +15,7 @@ import { resolveScoreInput } from './reportRuns.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..', '..');
+const DEFAULT_REPORT_LIMIT = 50;
 
 function parseArgs(argv) {
   const args = {};
@@ -28,17 +29,25 @@ function parseArgs(argv) {
   return args;
 }
 
-function parseScrapeLimit(value) {
+function parsePositiveInteger(value, label, fallback) {
   if (value == null) {
-    return Number.POSITIVE_INFINITY;
+    return fallback;
   }
 
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`Invalid scrape limit: ${value}`);
+    throw new Error(`Invalid ${label}: ${value}`);
   }
 
   return parsed;
+}
+
+function parseScrapeLimit(value) {
+  return parsePositiveInteger(value, 'scrape limit', Number.POSITIVE_INFINITY);
+}
+
+function parseShortlistLimit(value) {
+  return parsePositiveInteger(value, 'shortlist limit', DEFAULT_REPORT_LIMIT);
 }
 
 async function ensureDirectories() {
@@ -46,18 +55,23 @@ async function ensureDirectories() {
   await mkdir(path.join(projectRoot, 'data'), { recursive: true });
 }
 
-async function runScrapePhase({ args, source, cdpUrl }) {
+function printSummary(summary) {
+  console.log(JSON.stringify(summary, null, 2));
+}
+
+async function scrapeJobsToRunDirectory({ args, source, cdpUrl, mode }) {
   const scrapeLimit = parseScrapeLimit(args.scrapeLimit);
   const runContext = await ensureRunDirectory(projectRoot, args.runDir);
+  const rawJobsPath = path.join(runContext.runDir, 'raw-jobs.json');
   const jobs = await collectJobs({
-    rawJobsPath: path.join(runContext.runDir, 'raw-jobs.json'),
+    rawJobsPath,
     limit: scrapeLimit,
     cdpUrl,
     source,
   });
 
   const summary = {
-    mode: 'scrape',
+    mode,
     jobsSeen: jobs.length,
     source,
     usedCdpUrl: Boolean(cdpUrl),
@@ -70,12 +84,28 @@ async function runScrapePhase({ args, source, cdpUrl }) {
     generatedAt: runContext.generatedAt,
   });
 
-  console.log(JSON.stringify({
-    ...summary,
-    rawJobsPath: path.join(runContext.runDir, 'raw-jobs.json'),
-    reportDir: runContext.runDir,
+  return {
+    rawJobsPath,
+    runDir: runContext.runDir,
     generatedAt: runContext.generatedAt,
-  }, null, 2));
+    summary,
+  };
+}
+
+async function runScrapePhase({ args, source, cdpUrl }) {
+  const scrapeResult = await scrapeJobsToRunDirectory({
+    args,
+    source,
+    cdpUrl,
+    mode: 'scrape',
+  });
+
+  printSummary({
+    ...scrapeResult.summary,
+    rawJobsPath: scrapeResult.rawJobsPath,
+    reportDir: scrapeResult.runDir,
+    generatedAt: scrapeResult.generatedAt,
+  });
 }
 
 async function runScorePhase({ args, requirements, resume, normalization, env }) {
@@ -98,7 +128,7 @@ async function runScorePhase({ args, requirements, resume, normalization, env })
     cachePath: path.join(runDir, 'scoring-cache.json'),
   });
 
-  const shortlistLimit = Number(args.limit ?? 50);
+  const shortlistLimit = parseShortlistLimit(args.limit);
   const shortlist = [...scoringResult.scored]
     .sort((left, right) => right.totalScore - left.totalScore)
     .slice(0, shortlistLimit);
@@ -131,11 +161,28 @@ async function runScorePhase({ args, requirements, resume, normalization, env })
     summary,
   });
 
-  console.log(JSON.stringify({
+  printSummary({
     ...summary,
     reportDir: reportResult.runDir,
     generatedAt: reportResult.generatedAt,
-  }, null, 2));
+  });
+}
+
+async function loadScoringInputs(args) {
+  const requirementsPath = path.resolve(projectRoot, args.requirements ?? 'data/requirements.md');
+  const resumePath = path.resolve(projectRoot, args.resume ?? 'data/resume.md');
+
+  const [normalization, requirements, resume] = await Promise.all([
+    loadNormalizationConfig(path.join(projectRoot, 'config', 'normalization.json')),
+    parseRequirementsFile(requirementsPath),
+    parseResumeFile(resumePath),
+  ]);
+
+  return {
+    normalization,
+    requirements,
+    resume,
+  };
 }
 
 async function main() {
@@ -152,43 +199,25 @@ async function main() {
     return;
   }
 
-  const requirementsPath = path.resolve(projectRoot, args.requirements ?? 'data/requirements.md');
-  const resumePath = path.resolve(projectRoot, args.resume ?? 'data/resume.md');
-  const normalization = await loadNormalizationConfig(path.join(projectRoot, 'config', 'normalization.json'));
-  const requirements = await parseRequirementsFile(requirementsPath);
-  const resume = await parseResumeFile(resumePath);
+  const { normalization, requirements, resume } = await loadScoringInputs(args);
 
   if (mode === 'score') {
     await runScorePhase({ args, requirements, resume, normalization, env: process.env });
     return;
   }
 
-  const runContext = await ensureRunDirectory(projectRoot, args.runDir);
-  const scrapeLimit = parseScrapeLimit(args.scrapeLimit);
-  const jobs = await collectJobs({
-    rawJobsPath: path.join(runContext.runDir, 'raw-jobs.json'),
-    limit: scrapeLimit,
-    cdpUrl,
+  const scrapeResult = await scrapeJobsToRunDirectory({
+    args,
     source,
-  });
-
-  await writeRawJobsSnapshot({
-    runDir: runContext.runDir,
-    rawJobs: jobs,
-    summary: {
-      mode: 'run',
-      jobsSeen: jobs.length,
-      source,
-      usedCdpUrl: Boolean(cdpUrl),
-    },
-    generatedAt: runContext.generatedAt,
+    cdpUrl,
+    mode: 'run',
   });
 
   await runScorePhase({
     args: {
       ...args,
-      input: path.relative(projectRoot, path.join(runContext.runDir, 'raw-jobs.json')),
-      runDir: path.relative(projectRoot, runContext.runDir),
+      input: path.relative(projectRoot, scrapeResult.rawJobsPath),
+      runDir: path.relative(projectRoot, scrapeResult.runDir),
     },
     requirements,
     resume,
