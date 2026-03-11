@@ -1,0 +1,378 @@
+# jobs-filter
+
+## Quick Run
+
+Run these steps each time:
+
+1. In PowerShell, start Chrome:
+
+    & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\tmp\chrome-codex"
+
+2. In that Chrome, make sure LinkedIn is logged in and the browser is open on a LinkedIn Jobs search results page.
+
+3. In WSL, scrape jobs:
+
+    cd ~/job-search-2026/jobs-filter
+    node src/cli/index.js --mode=scrape --source=live
+
+4. In WSL, score the latest scrape result:
+
+    node src/cli/index.js --mode=score
+
+5. If you only want the top 20 shortlist items:
+
+    node src/cli/index.js --mode=score --limit=20
+
+Notes:
+
+- The first time you use this Chrome profile, log in to LinkedIn manually.
+- On this machine, WSL reaches Chrome through the forwarded endpoint http://172.19.16.1:9223.
+- After that, you usually do not need to log in again as long as the session is still valid.
+- If you only want to rerun scoring, skip scrape and just run step 4.
+
+## Port Notes
+
+- Chrome itself listens on 127.0.0.1:9222 on Windows.
+- WSL does not connect to that 9222 endpoint directly on this machine.
+- Windows forwards 172.19.16.1:9223 to Chrome's 127.0.0.1:9222.
+- So the PowerShell Chrome launch command should still use --remote-debugging-port=9222.
+- And PLAYWRIGHT_CDP_URL in .env should point to http://172.19.16.1:9223.
+
+In short:
+
+- 9222 = Chrome's own debugging port
+- 9223 = the forwarded port that WSL uses
+
+## If Scrape Cannot Connect
+
+You will usually notice this when running scrape, for example:
+
+    node src/cli/index.js --mode=scrape --source=live
+
+Typical symptoms:
+
+- connect ECONNREFUSED
+- browserType.connectOverCDP failed
+- scrape cannot reach the Chrome debugging endpoint
+
+Check in this order:
+
+1. Make sure Chrome was started from PowerShell with:
+
+    & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\tmp\chrome-codex"
+
+2. In WSL, check the current Windows host IP:
+
+    ip route | awk '/default/ {print $3}'
+
+3. Compare that IP with PLAYWRIGHT_CDP_URL in .env.
+
+4. If the IP changed, update .env so it looks like:
+
+    PLAYWRIGHT_CDP_URL=http://CURRENT_WINDOWS_IP:9223
+
+5. Try scrape again.
+
+6. Only if it still fails, re-run the admin PowerShell portproxy and firewall commands.
+
+这是一个面向 LinkedIn Jobs 的筛选工具。
+它会先从你当前打开的 LinkedIn Jobs 页面抓职位，再做去重、硬过滤和 AI 打分，最后输出 shortlist。
+
+## 现在是不是差不多可以跑了
+
+可以，已经到了按流程可用的状态。
+
+目前项目里已经有：
+
+- scrape 模式：连接浏览器，抓 LinkedIn 职位
+- score 模式：读取 raw-jobs.json，做过滤和打分
+- run 模式：一次跑完 scrape + score
+
+我刚刚在本地跑过测试，10 个测试全部通过。
+
+需要注意的是，live 抓取是否稳定，仍然取决于这些前提：
+
+- Chrome 已经以远程调试模式启动
+- LinkedIn 处于登录状态
+- Chrome 里已经打开一个 LinkedIn Jobs 搜索结果页
+- .env、data/requirements.md、data/resume.md 已准备好
+
+## 先回答你的关键问题
+
+### 每次都需要重新登录 LinkedIn 吗
+
+不一定。
+
+准确说法是：
+
+- 每次做 live 抓取前，都需要有一个已经打开的、可连接的 Chrome
+- 这个 Chrome 里需要有一个已登录的 LinkedIn Jobs 页面
+- 但是如果你一直复用同一个 Chrome profile，登录状态通常会保留
+
+所以一般情况是：
+
+- 第一次使用：需要登录 LinkedIn
+- 之后多数时候：不用重新登录，只需要确认登录状态还在
+
+通常只有下面几种情况才需要重新登录：
+
+- 你换了新的 Chrome profile 目录
+- 你删了原来的 profile 目录
+- LinkedIn 会话过期
+- 这个专用 Chrome 本来就没有登录
+
+## 默认工作方式
+
+以后建议全部从 WSL 发起，不用来回切 PowerShell。
+
+虽然 Chrome 是 Windows 程序，但你可以直接在 WSL 里启动它。
+
+## 首次配置
+
+### 1. 安装依赖
+
+在 WSL 中执行：
+
+    cd ~/job-search-2026/jobs-filter
+    npm install
+
+### 2. 准备输入文件
+
+项目默认使用这几个文件：
+
+- data/requirements.md
+- data/resume.md
+- .env
+
+如果你要参考模板，可以看：
+
+- data/requirements.example.md
+
+当前仓库里已经有：
+
+- data/requirements.md
+- data/resume.md
+- data/resume.pdf
+
+### 3. 配置 .env
+
+最小配置如下：
+
+    GEMINI_API_KEY=你的_key
+    GEMINI_MODEL=gemini-2.5-flash
+    PLAYWRIGHT_CDP_URL=http://172.19.16.1:9223
+
+说明：
+
+- GEMINI_API_KEY：AI 打分会用到
+- GEMINI_MODEL：默认保留 gemini-2.5-flash 即可
+- PLAYWRIGHT_CDP_URL：程序通过它连接到 Chrome
+
+通常先直接用 http://127.0.0.1:9222。
+如果 WSL 无法连通，再改成 Windows 主机 IP 对应的地址。
+
+## 每次具体操作流程
+
+推荐你日常都按下面这个顺序来。
+
+### 步骤 1：在 WSL 里启动 Windows Chrome
+
+在 WSL 里执行：
+
+    & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\tmp\chrome-codex"
+
+说明：
+
+- 这是在 WSL 里直接启动 Windows Chrome
+- --remote-debugging-port=9222 是给 Playwright 连接用的
+- --user-data-dir=C:\tmp\chrome-codex-linkedin 会把登录状态保存在一个固定目录里
+
+建议一直复用同一个 user-data-dir，这样以后通常不用反复登录。
+
+### 步骤 2：确认 LinkedIn 已登录
+
+第一次用这个 profile 时：
+
+- 打开 LinkedIn
+- 手动登录
+
+后续再跑时：
+
+- 只要登录状态还在，这一步可以直接跳过
+
+### 步骤 3：在 Chrome 里打开 LinkedIn Jobs 搜索结果页
+
+运行抓取前，Chrome 当前上下文里必须已经有一个 LinkedIn Jobs 页面。
+
+例如页面 URL 形态类似：
+
+- https://www.linkedin.com/jobs/...
+
+建议你先手动把搜索条件调好，比如：
+
+- 关键词
+- 地区
+- Remote 或 On-site
+- Experience level
+- Easy Apply
+
+这个工具会从你当前打开的 Jobs 搜索结果页继续抓，不会替你自动输入搜索词。
+
+### 步骤 4：在 WSL 里先抓取
+
+    cd ~/job-search-2026/jobs-filter
+    node src/cli/index.js --mode=scrape --source=live
+
+这一步会：
+
+- 连接到上面那个 Chrome
+- 检查当前页面是不是 LinkedIn Jobs
+- 读取职位卡片
+- 逐个打开详情页抓内容
+- 输出 reports/2026-03-11_00-34-41_MT/raw-jobs.json
+
+如果你只想先少抓一点做测试：
+
+    node src/cli/index.js --mode=scrape --source=live --scrapeLimit=40
+
+### 步骤 5：在 WSL 里再打分
+
+    node src/cli/index.js --mode=score
+
+这一步不再依赖 LinkedIn 页面，也不要求 Chrome 保持打开。
+它会：
+
+- 读取 raw-jobs.json
+- 去重
+- 做 hard filter
+- 调用 Gemini 做 soft scoring
+- 生成 shortlist 和 rejected 报告
+
+如果你只想看前 20 条 shortlist：
+
+    node src/cli/index.js --mode=score --limit=20
+
+## 最推荐的日常用法
+
+### 方案 A：分两步跑，最稳
+
+这是最推荐的方式：
+
+    node src/cli/index.js --mode=scrape --source=live
+    node src/cli/index.js --mode=score
+
+优点：
+
+- 抓取和打分分开，更容易排查问题
+- 抓取成功以后，可以反复重跑 score
+- 不需要每次都重新去 LinkedIn 抓数据
+
+### 方案 B：一条命令跑完
+
+    node src/cli/index.js --mode=run --source=live
+
+这个等价于：
+
+1. 先 scrape
+2. 再 score
+
+等你确认流程稳定以后，可以用这个一把跑完。
+
+## 真正的每次操作清单
+
+如果你只是想知道每天到底按什么顺序跑，就按这个版本：
+
+### 场景 1：今天要抓新的职位
+
+1. 在 WSL 启动上面的 Chrome 命令
+2. 确认这个 Chrome 里的 LinkedIn 还是登录状态
+3. 打开 LinkedIn Jobs 搜索结果页，并调好筛选条件
+4. 在 WSL 运行：
+
+    cd ~/job-search-2026/jobs-filter
+    node src/cli/index.js --mode=scrape --source=live
+    node src/cli/index.js --mode=score
+
+### 场景 2：今天只想重跑打分
+
+如果 raw-jobs.json 已经有了，那就不需要打开 Chrome，也不需要重新登录 LinkedIn，直接：
+
+    cd ~/job-search-2026/jobs-filter
+    node src/cli/index.js --mode=score --runDir=reports/EXISTING_RUN_DIR
+
+这也是为什么我更推荐分成 scrape 和 score 两步来跑。
+
+## 输出文件说明
+
+每个 run 目录里通常会有：
+
+- raw-jobs.json：原始抓取结果
+- processed-jobs.json：去重后的职位数据
+- scoring-cache.json：AI 打分缓存
+- shortlist.csv：适合表格查看
+- shortlist.md：适合直接阅读
+- rejected.md：被过滤掉的职位和原因
+- scoring-failures.md：AI 打分失败项
+- run-summary.json：本次运行摘要
+
+## 缓存机制
+
+score 阶段会写入：
+
+- reports/EXISTING_RUN_DIR/scoring-cache.json
+
+这意味着：
+
+- 同一批 raw-jobs.json 可以重复打分
+- 你调整 shortlist 数量或部分规则时，不一定每次都要重新请求 AI
+
+## 常见报错
+
+### 报错：Open a LinkedIn jobs search page in the connected browser before running the CLI.
+
+说明 Chrome 虽然连上了，但当前打开的不是 LinkedIn Jobs 搜索页。
+
+处理方法：
+
+- 在那个被远程调试的 Chrome 里打开 LinkedIn Jobs 页面
+- 不要只停在 LinkedIn 首页
+
+### 报错：No browser context found. Launch Chrome with remote debugging and keep one window open.
+
+说明程序没有连到一个可用的 Chrome。
+
+处理方法：
+
+- 重新执行上面的 Chrome 启动命令
+- 确保至少有一个窗口开着
+
+### 报错：连不上 127.0.0.1:9222
+
+处理方法：
+
+1. 确认 Chrome 是带 --remote-debugging-port=9222 启动的
+2. 确认 .env 里的 PLAYWRIGHT_CDP_URL 没写错
+3. 如果 WSL 下 127.0.0.1:9222 不通，再改成 Windows 主机 IP
+
+### 报错：AI 打分失败
+
+先检查：
+
+- GEMINI_API_KEY 是否有效
+- 当前网络是否可访问 Gemini API
+
+程序会把失败项写到：
+
+- scoring-failures.md
+
+## 一句话版本
+
+如果你要一个最简单的使用习惯，那就是：
+
+- 固定使用同一个 Chrome profile
+- 第一次登录 LinkedIn
+- 以后多数时候不用重新登录
+- 每次抓新职位时，先打开 LinkedIn Jobs 页面，再跑 scrape
+- 想重看结果或改规则时，只跑 score
+
+这样你日常基本就可以全部在 WSL 里完成。

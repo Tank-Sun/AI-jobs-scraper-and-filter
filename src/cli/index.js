@@ -11,6 +11,7 @@ import { dedupeJobs } from '../filter/dedupe.js';
 import { applyHardFilters } from '../filter/hardFilter.js';
 import { scoreJobs } from '../scoring/softScore.js';
 import { ensureRunDirectory, readJsonFile, writeRawJobsSnapshot, writeReports } from '../output/reports.js';
+import { resolveScoreInput } from './reportRuns.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..', '..');
@@ -43,16 +44,6 @@ function parseScrapeLimit(value) {
 async function ensureDirectories() {
   await mkdir(path.join(projectRoot, 'reports'), { recursive: true });
   await mkdir(path.join(projectRoot, 'data'), { recursive: true });
-}
-
-function resolveRawJobsPath(args, runDir) {
-  if (args.input) {
-    return path.resolve(projectRoot, args.input);
-  }
-  if (runDir) {
-    return path.join(runDir, 'raw-jobs.json');
-  }
-  return path.resolve(projectRoot, 'reports/raw-jobs.json');
 }
 
 async function runScrapePhase({ args, source, cdpUrl }) {
@@ -88,9 +79,13 @@ async function runScrapePhase({ args, source, cdpUrl }) {
 }
 
 async function runScorePhase({ args, requirements, resume, normalization, env }) {
-  const requestedRunDir = args.runDir ? path.resolve(projectRoot, args.runDir) : null;
-  const rawJobsPath = resolveRawJobsPath(args, requestedRunDir);
-  const runDir = requestedRunDir ?? path.dirname(rawJobsPath);
+  const scoreInput = await resolveScoreInput({
+    projectRoot,
+    input: args.input,
+    runDir: args.runDir,
+  });
+  const rawJobsPath = scoreInput.rawJobsPath;
+  const runDir = scoreInput.runDir;
   const generatedAt = new Date().toISOString();
   const jobs = await readJsonFile(rawJobsPath);
   const dedupeResult = dedupeJobs(jobs, normalization);

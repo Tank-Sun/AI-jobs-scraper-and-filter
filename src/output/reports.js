@@ -22,8 +22,10 @@ function formatMountainTimestamp(date = new Date()) {
   }).formatToParts(date);
 
   const map = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
-  const folderName = `${map.year}-${map.month}-${map.day}_${map.hour}-${map.minute}-${map.second}_MT`;
-  const label = `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second} MT`;
+  // Some Intl hour cycles emit 24 for midnight; normalize to 00 so folder names stay in standard HH-mm-ss form.
+  const normalizedHour = map.hour === '24' ? '00' : map.hour;
+  const folderName = `${map.year}-${map.month}-${map.day}_${normalizedHour}-${map.minute}-${map.second}_MT`;
+  const label = `${map.year}-${map.month}-${map.day} ${normalizedHour}:${map.minute}:${map.second} MT`;
   return { folderName, label };
 }
 
