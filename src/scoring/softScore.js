@@ -80,10 +80,33 @@ function heuristicScore(job, requirements, resume) {
 
 function buildGeminiPrompt(job, requirements, resume) {
   return [
-    'You are evaluating whether a LinkedIn job should remain on a software engineer shortlist.',
-    'Hard filters already removed deterministic mismatches. You should now decide whether to shortlist or reject this job overall.',
-    'Be strict about title fit, skill fit, visa practicality, and likely day-to-day work. Prefer concise evidence from the job text.',
-    'Treat company size as a soft preference. Missing or slightly outside-range company size should not by itself cause rejection.',
+    'You are evaluating whether a LinkedIn job should stay on a shortlist for Tank Sun.',
+    'Hard filters already removed deterministic mismatches. Your job is to make the final shortlist-or-reject decision using overall fit, not just keyword overlap.',
+    '',
+    'Candidate profile summary:',
+    '- Best fit: product engineering, frontend-heavy full-stack roles, platform/product engineering, developer experience, and AI-enabled application work.',
+    '- Strongest stack: TypeScript, JavaScript, React, Node.js.',
+    '- Good signs: user-facing product ownership, modern web engineering, AI features tied to real product value, cross-functional execution, and strong engineering quality.',
+    '- Bad signs: titles or work that are mainly product owner, project/program manager, QA, IT admin, support, consulting bodyshop work, low-level systems, embedded, native mobile, or backend stacks centered on Java/Spring or .NET unless the rest of the role is still clearly aligned.',
+    '',
+    'Decision policy:',
+    '- Be selective. A role should only be shortlisted if there is positive evidence that it is a genuinely strong fit, not merely acceptable.',
+    '- Prefer actual day-to-day work over a flattering title. If the title sounds good but the responsibilities are off-target, reject it.',
+    '- Prefer evidence from the job description and metadata. Do not invent missing facts.',
+    '- Missing company size is fine. Company size is only a soft preference and should not by itself cause rejection.',
+    '- If company size is outside the preferred range but the role is otherwise strong, that should usually lower enthusiasm rather than force rejection.',
+    '- If title fit, core stack fit, and day-to-day work are all weak or ambiguous, reject rather than giving the benefit of the doubt.',
+    '- Treat evergreen or generic future-opportunity postings more skeptically unless the role still looks unusually aligned.',
+    '- Use aiSignals as hints about uncertainty or possible concerns, but do not blindly mirror them.',
+    '',
+    'Scoring guidance:',
+    '- skills: how well the role matches the candidate's actual strengths and required stack.',
+    '- responsibilities: how well the actual work matches product/full-stack/frontend/AI application engineering goals.',
+    '- company_quality: domain and company context fit, treated as secondary to the role itself.',
+    '- title: how well the title aligns with the target or acceptable titles.',
+    '- seniority: whether the expected level is a good fit for mid-level to senior roles.',
+    '- growth: whether the role appears to offer strong ownership, scope, and learning potential.',
+    '- risk: penalize unclear fit, heavy mismatch to avoid-list directions, consulting/bodyshop signals, or noisy/ambiguous postings.',
     '',
     'Requirements:',
     JSON.stringify({
@@ -125,6 +148,9 @@ function buildGeminiPrompt(job, requirements, resume) {
     }, null, 2),
     '',
     'Return JSON only.',
+    'why_recommended should be concise and specific.',
+    'reject_reason should name the main mismatch plainly.',
+    'gaps should list the most important missing skills or concerns, not generic filler.',
   ].join('\n');
 }
 
