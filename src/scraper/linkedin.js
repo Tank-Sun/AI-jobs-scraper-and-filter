@@ -1,4 +1,4 @@
-﻿import { access, readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 
 import { chromium } from 'playwright';
 
@@ -54,8 +54,8 @@ async function autoScrollJobsList(page) {
   const hasList = (await list.count()) > 0;
 
   if (!hasList) {
-    await page.mouse.wheel(0, 4000);
-    await page.waitForTimeout(1000);
+    await page.mouse.wheel(0, 5000);
+    await page.waitForTimeout(1200);
     return;
   }
 
@@ -67,11 +67,24 @@ async function autoScrollJobsList(page) {
   }
 }
 
+function normalizeLinkedInJobUrl(href) {
+  if (!href || !href.includes('/jobs/view/')) {
+    return null;
+  }
+
+  const absolute = href.startsWith('http') ? href : new URL(href, 'https://www.linkedin.com').toString();
+  const url = new URL(absolute);
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
 async function collectJobLinks(page, limit) {
   const selectors = [
     'a.job-card-list__title',
     'a.job-card-container__link',
     '.jobs-search-results-list a[href*="/jobs/view/"]',
+    'a[href*="/jobs/view/"]',
   ];
 
   const links = new Set();
@@ -81,15 +94,14 @@ async function collectJobLinks(page, limit) {
       elements
         .map((element) => element.getAttribute('href'))
         .filter(Boolean)
-        .map((href) => {
-          if (href.startsWith('http')) {
-            return href;
-          }
-          return new URL(href, 'https://www.linkedin.com').toString();
-        })
     );
+
     for (const href of hrefs) {
-      links.add(href);
+      const normalized = normalizeLinkedInJobUrl(href);
+      if (!normalized) {
+        continue;
+      }
+      links.add(normalized);
       if (links.size >= limit) {
         return [...links];
       }
@@ -143,10 +155,10 @@ async function scrapeJobDetail(page, jobUrl) {
   await page.waitForTimeout(1200);
 
   const title = await textOrEmpty(
-    page.locator('.job-details-jobs-unified-top-card__job-title, .t-24.job-details-jobs-unified-top-card__job-title')
+    page.locator('.job-details-jobs-unified-top-card__job-title, .t-24.job-details-jobs-unified-top-card__job-title, a[href*="/jobs/view/"]')
   );
   const company = await textOrEmpty(
-    page.locator('.job-details-jobs-unified-top-card__company-name a, .job-details-jobs-unified-top-card__company-name')
+    page.locator('.job-details-jobs-unified-top-card__company-name a, .job-details-jobs-unified-top-card__company-name, a[href*="/company/"]')
   );
   const location = await textOrEmpty(
     page.locator('.job-details-jobs-unified-top-card__primary-description-container span').nth(0)
