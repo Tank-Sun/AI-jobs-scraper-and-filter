@@ -1,79 +1,79 @@
 # jobs-filter
 
-## Quick Run
+## 快速运行
 
-Run these steps each time:
+每次运行时，按这个顺序做：
 
-1. In PowerShell, start Chrome:
+1. 在 PowerShell 启动 Chrome：
 
     & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\tmp\chrome-codex"
 
-2. In that Chrome, make sure LinkedIn is logged in and the browser is open on a LinkedIn Jobs search results page.
+2. 在这个 Chrome 里确认已经登录 LinkedIn，并且浏览器停在 LinkedIn Jobs 搜索结果页。
 
-3. In WSL, scrape jobs:
+3. 在 WSL 里抓取职位：
 
     cd ~/job-search-2026/jobs-filter
     node src/cli/index.js --mode=scrape --source=live
 
-4. In WSL, score the latest scrape result:
+4. 在 WSL 里对最新一次抓取结果打分：
 
     node src/cli/index.js --mode=score
 
-5. If you only want the top 20 shortlist items:
+5. 如果你只想看前 20 条 shortlist：
 
     node src/cli/index.js --mode=score --limit=20
 
-Notes:
+补充说明：
 
-- The first time you use this Chrome profile, log in to LinkedIn manually.
-- On this machine, WSL reaches Chrome through the forwarded endpoint http://172.19.16.1:9223.
-- After that, you usually do not need to log in again as long as the session is still valid.
-- If you only want to rerun scoring, skip scrape and just run step 4.
+- 第一次使用这个 Chrome profile 时，需要手动登录 LinkedIn。
+- 在这台机器上，WSL 通过转发后的地址 http://172.19.16.1:9223 连接 Chrome。
+- 之后通常不用每次重新登录，只要登录状态还有效就行。
+- 如果你今天只想重跑打分，不重新抓取，直接运行第 4 步。
 
-## Port Notes
+## 端口说明
 
-- Chrome itself listens on 127.0.0.1:9222 on Windows.
-- WSL does not connect to that 9222 endpoint directly on this machine.
-- Windows forwards 172.19.16.1:9223 to Chrome's 127.0.0.1:9222.
-- So the PowerShell Chrome launch command should still use --remote-debugging-port=9222.
-- And PLAYWRIGHT_CDP_URL in .env should point to http://172.19.16.1:9223.
+- Chrome 自己在 Windows 上监听 127.0.0.1:9222。
+- 在这台机器上，WSL 不能直接连这个 9222 端口。
+- Windows 会把 172.19.16.1:9223 转发到 Chrome 的 127.0.0.1:9222。
+- 所以 PowerShell 里的 Chrome 启动命令仍然要用 --remote-debugging-port=9222。
+- 而 .env 里的 PLAYWRIGHT_CDP_URL 应该指向 http://172.19.16.1:9223。
 
-In short:
+简化理解：
 
-- 9222 = Chrome's own debugging port
-- 9223 = the forwarded port that WSL uses
+- 9222 = Chrome 自己的调试端口
+- 9223 = WSL 实际连接的转发端口
 
-## If Scrape Cannot Connect
+## 如果 Scrape 连不上
 
-You will usually notice this when running scrape, for example:
+通常你会在运行 scrape 时发现这个问题，例如：
 
     node src/cli/index.js --mode=scrape --source=live
 
-Typical symptoms:
+常见表现：
 
 - connect ECONNREFUSED
 - browserType.connectOverCDP failed
-- scrape cannot reach the Chrome debugging endpoint
+- scrape 无法连接 Chrome 调试端点
 
-Check in this order:
+按这个顺序检查：
 
-1. Make sure Chrome was started from PowerShell with:
+1. 先确认 Chrome 是用下面这个 PowerShell 命令启动的：
 
     & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="C:\tmp\chrome-codex"
 
-2. In WSL, check the current Windows host IP:
+2. 在 WSL 里检查当前 Windows 主机 IP：
 
     ip route | awk '/default/ {print $3}'
 
-3. Compare that IP with PLAYWRIGHT_CDP_URL in .env.
+3. 把这个 IP 和 .env 里的 PLAYWRIGHT_CDP_URL 对比一下。
 
-4. If the IP changed, update .env so it looks like:
+4. 如果 IP 变了，把 .env 改成这样：
 
     PLAYWRIGHT_CDP_URL=http://CURRENT_WINDOWS_IP:9223
 
-5. Try scrape again.
+5. 再试一次 scrape。
 
-6. Only if it still fails, re-run the admin PowerShell portproxy and firewall commands.
+6. 只有还不行时，再回管理员 PowerShell 里重跑 portproxy 和防火墙命令。
 
 这是一个面向 LinkedIn Jobs 的筛选工具。
 它会先从你当前打开的 LinkedIn Jobs 页面抓职位，再做去重、硬过滤和 AI 打分，最后输出 shortlist。
@@ -226,7 +226,7 @@ Check in this order:
 这一步会：
 
 - 连接到上面那个 Chrome
-- 检查当前页面是不是 LinkedIn Jobs
+这是一个面向 LinkedIn Jobs 的筛选工具。
 - 读取职位卡片
 - 逐个打开详情页抓内容
 - 输出 reports/2026-03-11_00-34-41_MT/raw-jobs.json
@@ -286,7 +286,7 @@ Check in this order:
 
 1. 在 WSL 启动上面的 Chrome 命令
 2. 确认这个 Chrome 里的 LinkedIn 还是登录状态
-3. 打开 LinkedIn Jobs 搜索结果页，并调好筛选条件
+这是一个面向 LinkedIn Jobs 的筛选工具。
 4. 在 WSL 运行：
 
     cd ~/job-search-2026/jobs-filter
@@ -372,7 +372,7 @@ score 阶段会写入：
 - 固定使用同一个 Chrome profile
 - 第一次登录 LinkedIn
 - 以后多数时候不用重新登录
-- 每次抓新职位时，先打开 LinkedIn Jobs 页面，再跑 scrape
+这是一个面向 LinkedIn Jobs 的筛选工具。
 - 想重看结果或改规则时，只跑 score
 
 这样你日常基本就可以全部在 WSL 里完成。
