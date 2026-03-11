@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 function escapeCsv(value) {
@@ -7,6 +7,24 @@ function escapeCsv(value) {
     return `"${text.replace(/"/g, '""')}"`;
   }
   return text;
+}
+
+function formatMountainTimestamp(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Denver',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const map = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  const folderName = `${map.year}-${map.month}-${map.day}_${map.hour}-${map.minute}-${map.second}_MT`;
+  const label = `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second} MT`;
+  return { folderName, label };
 }
 
 function toCsvRows(shortlist) {
@@ -47,8 +65,8 @@ function toCsvRows(shortlist) {
   return [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
 }
 
-function toShortlistMarkdown(shortlist) {
-  return shortlist
+function toShortlistMarkdown(shortlist, runLabel) {
+  const body = shortlist
     .map((job, index) => {
       const reasons = [
         `Total: ${job.totalScore}`,
@@ -63,24 +81,49 @@ function toShortlistMarkdown(shortlist) {
       return `## ${index + 1}. ${job.title} @ ${job.company}\n\n- Location: ${job.location}\n- Scores: ${reasons}\n- Why: ${job.whyRecommended}\n- AI Signals: ${(job.aiSignals ?? []).join(', ') || 'None'}\n- Gaps: ${(job.gaps ?? []).join(', ') || 'None'}\n- URL: ${job.jobUrl}\n`;
     })
     .join('\n');
+
+  return `# Shortlist\n\n- Generated: ${runLabel}\n\n${body}`;
 }
 
-function toRejectedMarkdown(rejected) {
-  return rejected
+function toRejectedMarkdown(rejected, runLabel) {
+  const body = rejected
     .map((job) => `## ${job.title} @ ${job.company}\n\n- URL: ${job.jobUrl}\n- Reasons: ${job.reasons.map((reason) => `${reason.field}: ${reason.message}`).join('; ')}\n`)
     .join('\n');
+
+  return `# Rejected\n\n- Generated: ${runLabel}\n\n${body}`;
 }
 
-function toScoringFailuresMarkdown(scoringFailures) {
-  return scoringFailures
+function toScoringFailuresMarkdown(scoringFailures, runLabel) {
+  const body = scoringFailures
     .map((job) => `## ${job.title} @ ${job.company}\n\n- URL: ${job.jobUrl}\n- Scoring failure: ${job.message}\n`)
     .join('\n');
+
+  return `# Scoring Failures\n\n- Generated: ${runLabel}\n\n${body}`;
 }
 
-export async function writeReports({ projectRoot, shortlist, rejected, scoringFailures }) {
+export async function writeReports({ projectRoot, shortlist, rejected, scoringFailures, rawJobs, summary }) {
   const reportsDir = path.join(projectRoot, 'reports');
-  await writeFile(path.join(reportsDir, 'shortlist.csv'), toCsvRows(shortlist), 'utf8');
-  await writeFile(path.join(reportsDir, 'shortlist.md'), toShortlistMarkdown(shortlist), 'utf8');
-  await writeFile(path.join(reportsDir, 'rejected.md'), toRejectedMarkdown(rejected), 'utf8');
-  await writeFile(path.join(reportsDir, 'scoring-failures.md'), toScoringFailuresMarkdown(scoringFailures), 'utf8');
+  const timestamp = formatMountainTimestamp();
+  const runDir = path.join(reportsDir, timestamp.folderName);
+  await mkdir(runDir, { recursive: true });
+
+  await writeFile(path.join(runDir, 'raw-jobs.json'), JSON.stringify(rawJobs, null, 2), 'utf8');
+  await writeFile(path.join(runDir, 'shortlist.csv'), toCsvRows(shortlist), 'utf8');
+  await writeFile(path.join(runDir, 'shortlist.md'), toShortlistMarkdown(shortlist, timestamp.label), 'utf8');
+  await writeFile(path.join(runDir, 'rejected.md'), toRejectedMarkdown(rejected, timestamp.label), 'utf8');
+  await writeFile(path.join(runDir, 'scoring-failures.md'), toScoringFailuresMarkdown(scoringFailures, timestamp.label), 'utf8');
+  await writeFile(
+    path.join(runDir, 'run-summary.json'),
+    JSON.stringify({
+      ...summary,
+      generatedAt: timestamp.label,
+      reportDir: runDir,
+    }, null, 2),
+    'utf8'
+  );
+
+  return {
+    runDir,
+    generatedAt: timestamp.label,
+  };
 }

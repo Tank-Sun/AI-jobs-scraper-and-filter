@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -67,14 +67,6 @@ async function main() {
 
   const allRejected = [...filteringResult.rejected, ...scoringResult.aiRejected];
 
-  await writeFile(rawJobsPath, JSON.stringify(jobs, null, 2), 'utf8');
-  await writeReports({
-    projectRoot,
-    shortlist,
-    rejected: allRejected,
-    scoringFailures: scoringResult.failures,
-  });
-
   const summary = {
     jobsSeen: jobs.length,
     deterministicRejected: filteringResult.rejected.length,
@@ -88,7 +80,20 @@ async function main() {
     resumePath: resume.path,
   };
 
-  console.log(JSON.stringify(summary, null, 2));
+  const reportResult = await writeReports({
+    projectRoot,
+    shortlist,
+    rejected: allRejected,
+    scoringFailures: scoringResult.failures,
+    rawJobs: jobs,
+    summary,
+  });
+
+  console.log(JSON.stringify({
+    ...summary,
+    reportDir: reportResult.runDir,
+    generatedAt: reportResult.generatedAt,
+  }, null, 2));
 }
 
 main().catch((error) => {
