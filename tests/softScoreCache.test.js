@@ -82,3 +82,47 @@ test('scoreJobs persists and reuses scoring cache entries', async () => {
   assert.equal(second.scored.length + second.aiRejected.length, 1);
   assert.equal(secondCache, firstCache);
 });
+
+test('scoreJobs preserves input order while processing multiple jobs concurrently', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'jobs-filter-order-'));
+  const cachePath = path.join(tempDir, 'scoring-cache.json');
+  const multiJobs = [
+    {
+      ...jobs[0],
+      title: 'Senior Software Engineer',
+      company: 'Acme AI',
+      jobUrl: 'https://example.com/job-1',
+      description: 'TypeScript React role building AI product features',
+    },
+    {
+      ...jobs[0],
+      title: 'Senior Software Engineer',
+      company: 'Beta AI',
+      jobUrl: 'https://example.com/job-2',
+      description: 'TypeScript React product role with customer-facing features',
+    },
+    {
+      ...jobs[0],
+      title: 'Senior Software Engineer',
+      company: 'Gamma AI',
+      jobUrl: 'https://example.com/job-3',
+      description: 'TypeScript React Node.js role for AI workflow tooling',
+    },
+  ];
+
+  const result = await scoreJobs({
+    jobs: multiJobs,
+    requirements,
+    resume,
+    env: { SCORE_CONCURRENCY: '3' },
+    cachePath,
+  });
+
+  assert.deepEqual(
+    result.scored.map((job) => job.jobUrl),
+    multiJobs.map((job) => job.jobUrl)
+  );
+
+  const cache = JSON.parse(await readFile(cachePath, 'utf8'));
+  assert.equal(Object.keys(cache.entries).length, 3);
+});

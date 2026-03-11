@@ -5,6 +5,7 @@ import path from 'node:path';
 import { GoogleGenAI, Type } from '@google/genai';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_SCORE_CONCURRENCY = 4;
 
 function clampScore(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -104,7 +105,7 @@ function buildGeminiPrompt(job, requirements, resume) {
     '- Use aiSignals as hints about uncertainty or possible concerns, but do not blindly mirror them.',
     '',
     'Scoring guidance:',
-    '- skills: how well the role matches the candidate\'s actual strengths and required stack.',
+    "- skills: how well the role matches the candidate's actual strengths and required stack.",
     '- responsibilities: how well the actual work matches product/full-stack/frontend/AI application engineering goals.',
     '- company_quality: domain and company context fit, treated as secondary to the role itself.',
     '- title: how well the title aligns with the target or acceptable titles.',
@@ -214,6 +215,14 @@ function buildScoreSignature(job, model) {
     .digest('hex');
 }
 
+function resolveScoreConcurrency(env) {
+  const parsed = Number(env.SCORE_CONCURRENCY ?? DEFAULT_SCORE_CONCURRENCY);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_SCORE_CONCURRENCY;
+  }
+  return Math.max(1, Math.floor(parsed));
+}
+
 async function loadScoreCache(cachePath) {
   if (!cachePath) {
     return { entries: {} };
@@ -287,118 +296,198 @@ async function callGemini({ apiKey, model, job, requirements, resume }) {
   };
 }
 
-export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) {
-  const scored = [];
-  const failures = [];
-  const aiRejected = [];
-  const apiKey = env.GEMINI_API_KEY;
-  const model = env.GEMINI_MODEL || DEFAULT_MODEL;
-  const scoringMode = apiKey ? model : 'heuristic-only';
-  const cache = await loadScoreCache(cachePath);
+function buildCacheAwareResult({ job, cacheKey, signature, scoringMode, cached }) {
+  if (!cached || cached.signature !== signature || cached.mode !== scoringMode) {
+    return null;
+  }
 
-  for (const job of jobs) {
-    const cacheKey = buildScoreCacheKey(job);
-    const signature = buildScoreSignature(job, scoringMode);
-    const cached = cache.entries?.[cacheKey];
+  if (cached.status === 'scored') {
+    return {
+      type: 'scored',
+      value: { ...job, ...cached.result },
+    };
+  }
 
-    if (cached && cached.signature === signature && cached.mode === scoringMode) {
-      if (cached.status === 'scored') {
-        scored.push({ ...job, ...cached.result });
-        continue;
-      }
-      if (cached.status === 'rejected') {
-        aiRejected.push({ ...job, ...cached.result, reasons: cached.reasons ?? [] });
-        continue;
-      }
-      if (cached.status === 'failed') {
-        failures.push({
-          ...job,
-          scoringFailed: true,
-          message: cached.message,
-          originalMessage: cached.originalMessage,
-        });
-        continue;
-      }
+  if (cached.status === 'rejected') {
+    return {
+      type: 'rejected',
+      value: { ...job, ...cached.result, reasons: cached.reasons ?? [] },
+    };
+  }
+
+  if (cached.status === 'failed') {
+    return {
+      type: 'failed',
+      value: {
+        ...job,
+        scoringFailed: true,
+        message: cached.message,
+        originalMessage: cached.originalMessage,
+      },
+    };
+  }
+
+  return null;
+}
+
+async function scoreSingleJob({ job, requirements, resume, apiKey, model, scoringMode, cache, cacheKey, signature }) {
+  const cachedResult = buildCacheAwareResult({
+    job,
+    cacheKey,
+    signature,
+    scoringMode,
+    cached: cache.entries?.[cacheKey],
+  });
+  if (cachedResult) {
+    return cachedResult;
+  }
+
+  try {
+    const result = apiKey
+      ? await callGemini({ apiKey, model, job, requirements, resume })
+      : heuristicScore(job, requirements, resume);
+
+    const cacheStatus = result.decision === 'reject' ? 'rejected' : 'scored';
+    const reasons = result.decision === 'reject'
+      ? [{ field: 'ai', message: result.rejectReason || result.whyRecommended }]
+      : undefined;
+
+    cache.entries[cacheKey] = buildCacheEntry({
+      key: cacheKey,
+      signature,
+      mode: scoringMode,
+      status: cacheStatus,
+      result,
+      reasons,
+    });
+
+    if (cacheStatus === 'rejected') {
+      return {
+        type: 'rejected',
+        value: { ...job, ...result, reasons },
+      };
     }
 
+    return {
+      type: 'scored',
+      value: { ...job, ...result },
+    };
+  } catch (error) {
     try {
-      const result = apiKey
-        ? await callGemini({ apiKey, model, job, requirements, resume })
-        : heuristicScore(job, requirements, resume);
+      const fallback = heuristicScore(job, requirements, resume);
+      const enriched = {
+        ...job,
+        ...fallback,
+        scoringFailureMessage: error instanceof Error ? error.message : String(error),
+      };
 
-      const enriched = { ...job, ...result };
-      if (result.decision === 'reject') {
-        const reasons = [{ field: 'ai', message: result.rejectReason || result.whyRecommended }];
-        aiRejected.push({ ...enriched, reasons });
+      if (fallback.decision === 'reject') {
+        const reasons = [{ field: 'fallback', message: fallback.rejectReason || fallback.whyRecommended }];
         cache.entries[cacheKey] = buildCacheEntry({
           key: cacheKey,
           signature,
           mode: scoringMode,
           status: 'rejected',
-          result,
+          result: fallback,
           reasons,
         });
-        await saveScoreCache(cachePath, cache);
-        continue;
+        return {
+          type: 'rejected',
+          value: { ...enriched, reasons },
+        };
       }
 
-      scored.push(enriched);
       cache.entries[cacheKey] = buildCacheEntry({
         key: cacheKey,
         signature,
         mode: scoringMode,
         status: 'scored',
-        result,
+        result: fallback,
       });
-      await saveScoreCache(cachePath, cache);
-    } catch (error) {
-      try {
-        const fallback = heuristicScore(job, requirements, resume);
-        const enriched = {
-          ...job,
-          ...fallback,
-          scoringFailureMessage: error instanceof Error ? error.message : String(error),
-        };
-        if (fallback.decision === 'reject') {
-          const reasons = [{ field: 'fallback', message: fallback.rejectReason || fallback.whyRecommended }];
-          aiRejected.push({ ...enriched, reasons });
-          cache.entries[cacheKey] = buildCacheEntry({
-            key: cacheKey,
-            signature,
-            mode: scoringMode,
-            status: 'rejected',
-            result: fallback,
-            reasons,
-          });
-        } else {
-          scored.push(enriched);
-          cache.entries[cacheKey] = buildCacheEntry({
-            key: cacheKey,
-            signature,
-            mode: scoringMode,
-            status: 'scored',
-            result: fallback,
-          });
-        }
-        await saveScoreCache(cachePath, cache);
-      } catch (fallbackError) {
-        const failure = {
-          ...job,
-          scoringFailed: true,
-          message: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
-          originalMessage: error instanceof Error ? error.message : String(error),
-        };
-        failures.push(failure);
-        cache.entries[cacheKey] = buildCacheEntry({
-          key: cacheKey,
-          signature,
-          mode: scoringMode,
-          status: 'failed',
-          message: failure.message,
-          originalMessage: failure.originalMessage,
-        });
-        await saveScoreCache(cachePath, cache);
-      }
+      return {
+        type: 'scored',
+        value: enriched,
+      };
+    } catch (fallbackError) {
+      const failure = {
+        ...job,
+        scoringFailed: true,
+        message: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        originalMessage: error instanceof Error ? error.message : String(error),
+      };
+      cache.entries[cacheKey] = buildCacheEntry({
+        key: cacheKey,
+        signature,
+        mode: scoringMode,
+        status: 'failed',
+        message: failure.message,
+        originalMessage: failure.originalMessage,
+      });
+      return {
+        type: 'failed',
+        value: failure,
+      };
+    }
+  }
+}
+
+async function mapWithConcurrency(items, limit, worker) {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
+export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) {
+  const apiKey = env.GEMINI_API_KEY;
+  const model = env.GEMINI_MODEL || DEFAULT_MODEL;
+  const scoringMode = apiKey ? model : 'heuristic-only';
+  const scoreConcurrency = resolveScoreConcurrency(env);
+  const cache = await loadScoreCache(cachePath);
+
+  const results = await mapWithConcurrency(jobs, scoreConcurrency, async (job) => {
+    const cacheKey = buildScoreCacheKey(job);
+    const signature = buildScoreSignature(job, scoringMode);
+    return scoreSingleJob({
+      job,
+      requirements,
+      resume,
+      apiKey,
+      model,
+      scoringMode,
+      cache,
+      cacheKey,
+      signature,
+    });
+  });
+
+  await saveScoreCache(cachePath, cache);
+
+  const scored = [];
+  const failures = [];
+  const aiRejected = [];
+
+  for (const result of results) {
+    if (result.type === 'scored') {
+      scored.push(result.value);
+    } else if (result.type === 'rejected') {
+      aiRejected.push(result.value);
+    } else if (result.type === 'failed') {
+      failures.push(result.value);
     }
   }
 
@@ -408,4 +497,6 @@ export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) 
 export const __testables = {
   buildScoreCacheKey,
   buildScoreSignature,
+  mapWithConcurrency,
+  resolveScoreConcurrency,
 };
