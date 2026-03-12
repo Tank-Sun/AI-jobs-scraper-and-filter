@@ -25,8 +25,8 @@ const listKeys = new Set([
 
 const defaultWeights = {
   skills: 40,
-  responsibilities: 15,
-  company_quality: 15,
+  responsibilities: 20,
+  company_quality: 10,
   title: 10,
   seniority: 10,
   growth: 5,

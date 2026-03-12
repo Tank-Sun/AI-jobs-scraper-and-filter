@@ -12,13 +12,58 @@ test('parseRequirementsFile reads the richer requirements schema', async () => {
 
   await writeFile(
     target,
-    `must_have_locations:\n  - remote-us\n\nmust_have_company_size:\n  - 51-200\n\nmust_have_employment_types:\n  - full-time\n\nvisa_policy:\n  - tn-eligible\n\ntarget_titles:\n  - software engineer\n\nacceptable_titles:\n  - senior software engineer\n\nexperience_level:\n  - senior\n\nmust_have_skills:\n  - typescript\n\nnice_to_have_skills:\n  - playwright\n\nindustry_preferences:\n  - ai\n\nnegative_skills:\n  - java\n\nred_flags:\n  - unpaid\n\nweights:\n  skills: 40\n  responsibilities: 15\n  company_quality: 15\n  title: 10\n  seniority: 10\n  growth: 5\n  risk: 5\n`,
+    `must_have_locations:
+  - remote-us
+
+must_have_company_size:
+  - 51-200
+
+must_have_employment_types:
+  - full-time
+
+visa_policy:
+  - tn-eligible
+
+target_titles:
+  - software engineer
+
+acceptable_titles:
+  - senior software engineer
+
+experience_level:
+  - senior
+
+must_have_skills:
+  - typescript
+
+nice_to_have_skills:
+  - playwright
+
+industry_preferences:
+  - ai
+
+negative_skills:
+  - java
+
+red_flags:
+  - unpaid
+
+weights:
+  skills: 40
+  responsibilities: 20
+  company_quality: 10
+  title: 10
+  seniority: 10
+  growth: 5
+  risk: 5
+`,
     'utf8'
   );
 
   const parsed = await parseRequirementsFile(target);
   assert.deepEqual(parsed.must_have_locations, ['remote-us']);
   assert.deepEqual(parsed.visa_policy, ['tn-eligible']);
-  assert.equal(parsed.weights.company_quality, 15);
+  assert.equal(parsed.weights.company_quality, 10);
+  assert.equal(parsed.weights.responsibilities, 20);
   assert.deepEqual(parsed.all_titles, ['software engineer', 'senior software engineer']);
 });

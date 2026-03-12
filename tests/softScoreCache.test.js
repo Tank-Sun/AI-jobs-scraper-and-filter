@@ -64,6 +64,25 @@ test('riskScore ignores missing employment and visa metadata by themselves', () 
   assert.equal(score, 95);
 });
 
+
+test('heuristicScore soft-penalizes oversized companies instead of filtering them out', () => {
+  const preferredSize = heuristicScore({
+    ...jobs[0],
+    aiSignals: [],
+  }, requirements, resume);
+
+  const oversized = heuristicScore({
+    ...jobs[0],
+    company: 'BigCo AI',
+    companySize: '5000+',
+    aiSignals: ['company_size_outside_preferred_range'],
+  }, requirements, resume);
+
+  assert.ok(oversized.totalScore < preferredSize.totalScore);
+  assert.ok(oversized.breakdown.company_quality < preferredSize.breakdown.company_quality);
+  assert.ok(oversized.breakdown.risk < preferredSize.breakdown.risk);
+});
+
 test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncertainty rather than rejection', () => {
   const prompt = buildGeminiPrompt(jobs[0], requirements, resume);
 
@@ -156,6 +175,95 @@ test('heuristicScore prefers full stack over fitted backend over frontend-only r
 
   assert.ok(fullStack.totalScore > backend.totalScore);
   assert.ok(backend.totalScore > frontend.totalScore);
+});
+
+
+test('heuristicScore penalizes pseudo full-stack Java roles below user-facing AI frontend/product roles', () => {
+  const pseudoFullStack = heuristicScore({
+    ...jobs[0],
+    title: 'Full Stack Java Developer',
+    company: 'AgencyCo',
+    description: 'Build full stack enterprise systems with Java, Spring, backend services, and internal integrations.',
+    aiSignals: [],
+    mustHaveSkillMatches: [],
+    negativeSkillMatches: ['java'],
+  }, requirements, resume);
+
+  const frontendAiProduct = heuristicScore({
+    ...jobs[0],
+    title: 'Frontend Engineer',
+    company: 'AiProductCo',
+    description: 'Build user-facing AI-powered product features with React, TypeScript, design systems, and strong product ownership.',
+    aiSignals: [],
+    mustHaveSkillMatches: ['typescript'],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  assert.ok(frontendAiProduct.totalScore > pseudoFullStack.totalScore);
+  assert.ok(frontendAiProduct.breakdown.responsibilities > pseudoFullStack.breakdown.responsibilities);
+});
+
+test('heuristicScore ranks product engineering above backend growth platform roles', () => {
+  const growthPlatform = heuristicScore({
+    ...jobs[0],
+    title: 'Senior Software Engineer, Backend (Growth Platform)',
+    company: 'BigFintech',
+    description: 'Build backend services, streaming systems, and platform infrastructure for growth platform initiatives.',
+    aiSignals: ['company_size_outside_preferred_range'],
+    mustHaveSkillMatches: [],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  const productEngineering = heuristicScore({
+    ...jobs[0],
+    title: 'Senior Software Engineer, Product Engineering',
+    company: 'ProductCo',
+    description: 'Ship user-facing product features end-to-end with TypeScript, React, Node.js, and product and design decisions.',
+    aiSignals: [],
+    mustHaveSkillMatches: ['typescript'],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  assert.ok(productEngineering.totalScore > growthPlatform.totalScore);
+  assert.ok(productEngineering.breakdown.responsibilities > growthPlatform.breakdown.responsibilities);
+});
+
+
+test('heuristicScore ranks frontend AI product work above enterprise AI and ML platform roles', () => {
+  const enterpriseAi = heuristicScore({
+    ...jobs[0],
+    title: 'Senior Developer, Enterprise AI',
+    company: 'Clio',
+    description: 'Build enterprise AI platform capabilities, backend services, and internal systems for AI adoption.',
+    aiSignals: [],
+    mustHaveSkillMatches: ['typescript'],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  const mlPlatform = heuristicScore({
+    ...jobs[0],
+    title: 'Senior ML Platform Developer',
+    company: 'BigBank',
+    description: 'Build ML platform infrastructure, model serving, backend services, and platform tooling.',
+    aiSignals: ['company_size_outside_preferred_range'],
+    mustHaveSkillMatches: [],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  const frontendAiProduct = heuristicScore({
+    ...jobs[0],
+    title: 'Frontend Developer',
+    company: 'AiSaaSCo',
+    description: 'Build user-facing AI-powered product features with React, TypeScript, Next.js, customer-facing workflows, and strong product ownership.',
+    aiSignals: [],
+    mustHaveSkillMatches: ['typescript'],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  assert.ok(frontendAiProduct.totalScore > enterpriseAi.totalScore);
+  assert.ok(frontendAiProduct.totalScore > mlPlatform.totalScore);
+  assert.ok(frontendAiProduct.breakdown.responsibilities > enterpriseAi.breakdown.responsibilities);
+  assert.ok(frontendAiProduct.breakdown.growth > mlPlatform.breakdown.growth);
 });
 
 test('heuristicScore ranks web roles above React Native, and React Native above native mobile', () => {

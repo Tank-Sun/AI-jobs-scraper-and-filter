@@ -132,7 +132,7 @@ async function runScorePhase({ args, requirements, resume, normalization, env })
   const shortlist = [...scoringResult.scored]
     .sort((left, right) => right.totalScore - left.totalScore)
     .slice(0, shortlistLimit);
-  const allRejected = [...filteringResult.rejected, ...scoringResult.aiRejected];
+  const allRejected = [...filteringResult.rejected];
 
   const summary = {
     mode: 'score',

@@ -6,7 +6,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SCORE_CONCURRENCY = 4;
-const SCORING_SIGNATURE_VERSION = '2026-03-11-score-only-ai-product-v7';
+const SCORING_SIGNATURE_VERSION = '2026-03-11-score-only-ai-product-v10';
 const AI_HEURISTIC_BLEND_RATIO = 0.4;
 
 const PRODUCT_ENGINEERING_TERMS = [
@@ -166,6 +166,30 @@ const AI_INFRA_TERMS = [
   'observability',
 ];
 
+const BACKEND_PLATFORM_TERMS = [
+  'growth platform',
+  'integrations services',
+  'streaming',
+  'backend services',
+  'ml platform',
+  'platform team',
+  'enterprise ai',
+  'internal platform',
+  'platform developer',
+  'enterprise platform',
+];
+
+const WRONG_FULL_STACK_TERMS = [
+  'java',
+  'spring',
+  '.net',
+  'c#',
+  'c++',
+  'sap',
+  'dynamics',
+  'netsuite',
+];
+
 function clampScore(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
@@ -209,12 +233,14 @@ function skillCoverageScore(job, requirements, resume) {
   const fullStackBoost = fullStackSignal(job) * 18;
   const backendBoost = fittedBackendSignal(job) * 14;
   const frontendBoost = frontendSignal(job) * 6;
+  const frontendAiBoost = hasFrontendAiProductSignal(job) ? 12 : 0;
+  const pseudoFullStackPenalty = hasWrongFullStackSignal(job) ? 20 : 0;
   const negativePenalty = Math.min((job.negativeSkillMatches?.length ?? 0) * 18, 45);
   const avoidRatioPenalty = ratioOfTerms(text, AVOID_DIRECTION_TERMS) * 25;
   const nativeMobilePenalty = nativeMobileRatio(job) * 55;
   const reactNativePenalty = hasReactNativeSignal(job) ? 8 : 0;
   const missingCorePenalty = mustHaveCoverage === 0 && !hasAiProductSignal(job) ? 15 : 0;
-  return clampScore((mustHaveCoverage * 0.55 + niceToHaveRatio * 0.15 + resumeRatio * 0.3) * 100 + fullStackBoost + backendBoost + frontendBoost - negativePenalty - avoidRatioPenalty - nativeMobilePenalty - reactNativePenalty - missingCorePenalty);
+  return clampScore((mustHaveCoverage * 0.55 + niceToHaveRatio * 0.15 + resumeRatio * 0.3) * 100 + fullStackBoost + backendBoost + frontendBoost + frontendAiBoost - negativePenalty - avoidRatioPenalty - nativeMobilePenalty - reactNativePenalty - missingCorePenalty - pseudoFullStackPenalty);
 }
 
 function seniorityScore(job, requirements) {
@@ -279,6 +305,21 @@ function hasStrongProductSignal(job) {
   return productTerms.some((term) => text.includes(term));
 }
 
+
+function hasWrongFullStackSignal(job) {
+  const text = jobText(job);
+  return (text.includes('full stack') || text.includes('full-stack')) && WRONG_FULL_STACK_TERMS.some((term) => text.includes(term));
+}
+
+function backendPlatformRatio(job) {
+  return ratioOfTerms(jobText(job), BACKEND_PLATFORM_TERMS);
+}
+
+function hasFrontendAiProductSignal(job) {
+  const text = jobText(job);
+  return frontendSignal(job) > 0 && hasAiProductSignal(job) && (hasStrongProductSignal(job) || text.includes('ship features') || text.includes('user-facing') || text.includes('customer-facing'));
+}
+
 function companyQualityScore(job, requirements) {
   const text = jobText(job);
   if (ratioOfTerms(text, CONSULTING_TERMS) > 0) {
@@ -288,18 +329,19 @@ function companyQualityScore(job, requirements) {
     return 35;
   }
   if (hasInternalToolsSignal(job) && !hasDevexSignal(job)) {
-    return 40;
+    return hasFrontendAiProductSignal(job) ? 55 : 30;
   }
   if (hasAiProductSignal(job)) {
-    return 92;
+    return (job.aiSignals ?? []).includes('company_size_outside_preferred_range') ? 82 : 92;
   }
   if (hasStrongProductSignal(job) || fullStackSignal(job) > 0.12) {
-    return 84;
+    return (job.aiSignals ?? []).includes('company_size_outside_preferred_range') ? 74 : 84;
   }
-  if (ratioOfTerms(text, AI_INFRA_TERMS) > 0.18) {
-    return 45;
+  if (ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 || backendPlatformRatio(job) > 0.15) {
+    return (job.aiSignals ?? []).includes('company_size_outside_preferred_range') ? 34 : 42;
   }
-  return clampScore(requirements.industry_preferences.some((preference) => text.includes(preference)) ? 80 : 55);
+  const baseScore = requirements.industry_preferences.some((preference) => text.includes(preference)) ? 80 : 55;
+  return clampScore((job.aiSignals ?? []).includes('company_size_outside_preferred_range') ? baseScore - 10 : baseScore);
 }
 
 function riskScore(job) {
@@ -307,7 +349,7 @@ function riskScore(job) {
   const signalPenaltyByType = {
     missing_location_bucket: 2,
     missing_company_size_bucket: 0,
-    company_size_outside_preferred_range: 4,
+    company_size_outside_preferred_range: 10,
     missing_employment_type_bucket: 0,
     missing_visa_bucket: 0,
     title_not_in_preferred_lists: 8,
@@ -321,10 +363,12 @@ function riskScore(job) {
   const negativePenalty = Math.min((job.negativeSkillMatches?.length ?? 0) * 12, 36);
   const consultingPenalty = ratioOfTerms(text, CONSULTING_TERMS) > 0 ? 22 : 0;
   const evergreenPenalty = ratioOfTerms(text, EVERGREEN_TERMS) > 0 ? 12 : 0;
-  const infraPenalty = ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 && !hasAiProductSignal(job) ? 10 : 0;
+  const infraPenalty = ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 && !hasFrontendAiProductSignal(job) ? 18 : 0;
+  const backendPlatformPenalty = backendPlatformRatio(job) > 0.15 && !hasFrontendAiProductSignal(job) ? 18 : 0;
+  const pseudoFullStackPenalty = hasWrongFullStackSignal(job) ? 12 : 0;
   const nativeMobilePenalty = nativeMobileRatio(job) * 42;
   const reactNativePenalty = hasReactNativeSignal(job) ? 6 : 0;
-  return clampScore(95 - signalPenalty - negativePenalty - consultingPenalty - evergreenPenalty - infraPenalty - nativeMobilePenalty - reactNativePenalty);
+  return clampScore(95 - signalPenalty - negativePenalty - consultingPenalty - evergreenPenalty - infraPenalty - backendPlatformPenalty - pseudoFullStackPenalty - nativeMobilePenalty - reactNativePenalty);
 }
 
 function calculateWeightedTotalScore(breakdown, weights) {
@@ -345,17 +389,20 @@ function responsibilityAlignmentScore(job) {
   const positiveRatio = ratioOfTerms(text, PRODUCT_ENGINEERING_TERMS);
   const avoidRatio = ratioOfTerms(text, AVOID_DIRECTION_TERMS);
   const consultingPenalty = ratioOfTerms(text, CONSULTING_TERMS) > 0 ? 20 : 0;
-  const infraPenalty = ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 && !hasAiProductSignal(job) ? 18 : 0;
-  const internalToolsPenalty = hasInternalToolsSignal(job) && !hasDevexSignal(job) ? 18 : 0;
+  const infraPenalty = ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 && !hasFrontendAiProductSignal(job) ? 30 : 0;
+  const backendPlatformPenalty = backendPlatformRatio(job) > 0.15 && !hasFrontendAiProductSignal(job) ? 24 : 0;
+  const internalToolsPenalty = hasInternalToolsSignal(job) && !hasDevexSignal(job) ? 26 : 0;
   const nativeMobilePenalty = nativeMobileRatio(job) * 55;
   const reactNativePenalty = hasReactNativeSignal(job) ? 8 : 0;
   const aiBoost = hasAiProductSignal(job) ? 12 : 0;
   const devexBoost = hasDevexSignal(job) ? 10 : 0;
-  const productBoost = hasStrongProductSignal(job) ? 16 : 0;
+  const productBoost = hasStrongProductSignal(job) ? 24 : 0;
+  const frontendAiBoost = hasFrontendAiProductSignal(job) ? 24 : 0;
+  const pseudoFullStackPenalty = hasWrongFullStackSignal(job) ? 16 : 0;
   const fullStackBoost = fullStackSignal(job) * 18;
   const backendBoost = fittedBackendSignal(job) * 14;
-  const frontendBoost = frontendSignal(job) * 5;
-  return clampScore(28 + positiveRatio * 66 - avoidRatio * 45 - consultingPenalty - infraPenalty - internalToolsPenalty - nativeMobilePenalty - reactNativePenalty + aiBoost + devexBoost + productBoost + fullStackBoost + backendBoost + frontendBoost);
+  const frontendBoost = frontendSignal(job) * 7;
+  return clampScore(28 + positiveRatio * 66 - avoidRatio * 45 - consultingPenalty - infraPenalty - backendPlatformPenalty - internalToolsPenalty - nativeMobilePenalty - reactNativePenalty - pseudoFullStackPenalty + aiBoost + devexBoost + productBoost + frontendAiBoost + fullStackBoost + backendBoost + frontendBoost);
 }
 
 function titleAlignmentScore(job, requirements) {
@@ -363,19 +410,25 @@ function titleAlignmentScore(job, requirements) {
   let score = clampScore(overlapScore(job, requirements.all_titles) * 100);
 
   if (normalizedTitle.includes('product engineering')) {
-    score += 18;
+    score += 24;
   }
   if (normalizedTitle.includes('fullstack') || normalizedTitle.includes('full stack')) {
-    score += 16;
+    score += hasWrongFullStackSignal(job) ? 2 : 16;
   }
   if (normalizedTitle.includes('backend')) {
     score += normalizedTitle.includes('java') || normalizedTitle.includes('.net') || normalizedTitle.includes('c++') ? -8 : 8;
   }
   if (normalizedTitle.includes('frontend')) {
-    score += 8;
+    score += hasFrontendAiProductSignal(job) ? 14 : 8;
   }
   if (normalizedTitle.includes('developer productivity') || normalizedTitle.includes('developer experience')) {
     score += 14;
+  }
+  if (normalizedTitle.includes('tools') && !hasDevexSignal(job)) {
+    score -= 16;
+  }
+  if (normalizedTitle.includes('growth platform') || normalizedTitle.includes('integrations')) {
+    score -= 12;
   }
   if (normalizedTitle.includes('staff') || normalizedTitle.includes('principal')) {
     score -= 22;
@@ -393,11 +446,14 @@ function titleAlignmentScore(job, requirements) {
 function heuristicScore(job, requirements, resume) {
   const weights = requirements.weights;
   const growthBase = (job.description ?? '').toLowerCase().includes('growth') ? 80 : 45;
+  const growthPenalty = backendPlatformRatio(job) > 0.15 && !hasFrontendAiProductSignal(job) ? 18 : 0;
+  const productGrowthBoost = hasStrongProductSignal(job) ? 10 : 0;
+  const frontendAiGrowthBoost = hasFrontendAiProductSignal(job) ? 10 : 0;
   const breakdown = {
     skills: skillCoverageScore(job, requirements, resume),
     responsibilities: responsibilityAlignmentScore(job),
     company_quality: companyQualityScore(job, requirements),
-    growth: clampScore(hasAiProductSignal(job) ? Math.max(growthBase, 90) : hasStrongProductSignal(job) ? Math.max(growthBase, 80) : growthBase),
+    growth: clampScore((hasAiProductSignal(job) ? Math.max(growthBase, 90) : hasStrongProductSignal(job) ? Math.max(growthBase, 80) : growthBase) + productGrowthBoost + frontendAiGrowthBoost - growthPenalty),
     title: titleAlignmentScore(job, requirements),
     seniority: seniorityScore(job, requirements),
     risk: riskScore(job),

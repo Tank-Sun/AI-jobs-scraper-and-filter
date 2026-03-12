@@ -16,6 +16,7 @@ const normalization = {
     'no-sponsorship-required': ['no sponsorship'],
   },
   companySizeBands: {
+    '11-50': [11, 50],
     '51-200': [51, 200],
     '201-500': [201, 500],
     '5000+': [5000, 1000000],
@@ -67,7 +68,7 @@ test('applyHardFilters accepts deterministic matches and keeps AI signals for am
   assert.match(result.accepted[0].aiSignals.join(','), /title_not_in_preferred_lists/);
 });
 
-test('applyHardFilters rejects explicit company-size mismatches but keeps missing company size as ambiguity', () => {
+test('applyHardFilters soft-flags oversized companies but rejects undersized ones and keeps missing company size as ambiguity', () => {
   const oversized = [
     {
       title: 'Software Engineer',
@@ -82,9 +83,9 @@ test('applyHardFilters rejects explicit company-size mismatches but keeps missin
   ];
 
   const oversizedResult = applyHardFilters(oversized, requirements, normalization);
-  assert.equal(oversizedResult.accepted.length, 0);
-  assert.equal(oversizedResult.rejected.length, 1);
-  assert.match(oversizedResult.rejected[0].reasons.map((item) => item.field).join(','), /companySize/);
+  assert.equal(oversizedResult.accepted.length, 1);
+  assert.equal(oversizedResult.rejected.length, 0);
+  assert.match(oversizedResult.accepted[0].aiSignals.join(','), /company_size_outside_preferred_range/);
 
   const missing = [
     {
@@ -103,6 +104,27 @@ test('applyHardFilters rejects explicit company-size mismatches but keeps missin
   assert.equal(missingResult.accepted.length, 1);
   assert.equal(missingResult.rejected.length, 0);
   assert.match(missingResult.accepted[0].aiSignals.join(','), /missing_company_size_bucket/);
+});
+
+
+test('applyHardFilters still rejects companies below the preferred size range', () => {
+  const tooSmall = [
+    {
+      title: 'Software Engineer',
+      company: 'TinyCo',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'No sponsorship',
+      companySize: '11-50',
+      description: 'Typescript React product role',
+      jobUrl: 'https://example.com/2c',
+    },
+  ];
+
+  const result = applyHardFilters(tooSmall, requirements, normalization);
+  assert.equal(result.accepted.length, 0);
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /companySize/);
 });
 
 test('applyHardFilters rejects titles that are clearly outside the target experience range', () => {

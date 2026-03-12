@@ -1,39 +1,80 @@
-﻿must_have_locations:
-- denver-co
+must_have_locations:
 - remote-us
+- remote-canada
 
 must_have_company_size:
-- 11-50
 - 51-200
 - 201-500
+- 501-1000
 
 must_have_employment_types:
 - full-time
 
-must_have_visa_policy:
-- sponsorship-available
+visa_policy:
+- tn-eligible
+- no-sponsorship-required
 
 target_titles:
 - software engineer
+- software developer
+- full-stack engineer
+- full-stack developer
 - backend engineer
-- platform engineer
+- product engineer
+
+acceptable_titles:
+- senior software engineer
+- senior software developer
+- senior full-stack engineer
+- backend developer
+- frontend engineer
+- developer experience engineer
+
+experience_level:
+- mid-level
+- senior
+
+must_have_skills:
+- typescript
+- javascript
+- node.js
 
 nice_to_have_skills:
-- node.js
-- python
-- sql
+- react
+- next.js
+- postgresql
 - aws
 - playwright
+- llm integration
+
+industry_preferences:
+- ai
+- saas
+- developer tools
+- product platforms
+
+negative_skills:
+- java
+- spring
+- .net
+- c#
+- android native
+- ios native
+- c++
+- embedded systems
 
 red_flags:
 - on-site five days
 - unpaid
-- unclear compensation
+- contract-only
+- consulting bodyshop
+- early stage startup (<20 employees)
 
 weights:
-  skills: 35
+  skills: 40
   responsibilities: 20
-  growth: 15
+  company_quality: 10
   title: 10
   seniority: 10
-  risk: 10
+  growth: 5
+  risk: 5

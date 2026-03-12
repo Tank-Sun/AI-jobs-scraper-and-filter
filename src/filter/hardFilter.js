@@ -12,6 +12,36 @@ function matchesAny(text, terms) {
   return terms.some((term) => text.includes(term));
 }
 
+function getCompanySizeRange(bucket, normalization) {
+  return normalization.companySizeBands?.[bucket] ?? null;
+}
+
+function splitCompanySizeDecision(bucket, requirements, normalization) {
+  if (!bucket) {
+    return { accepted: true, signal: 'missing_company_size_bucket' };
+  }
+
+  if (requirements.must_have_company_size.includes(bucket)) {
+    return { accepted: true, signal: null };
+  }
+
+  const candidateRange = getCompanySizeRange(bucket, normalization);
+  const preferredRanges = requirements.must_have_company_size
+    .map((preferredBucket) => getCompanySizeRange(preferredBucket, normalization))
+    .filter(Boolean);
+
+  if (!candidateRange || preferredRanges.length === 0) {
+    return { accepted: false, signal: null };
+  }
+
+  const preferredUpperBound = Math.max(...preferredRanges.map((range) => range[1]));
+  if (candidateRange[1] > preferredUpperBound) {
+    return { accepted: true, signal: 'company_size_outside_preferred_range' };
+  }
+
+  return { accepted: false, signal: null };
+}
+
 export function applyHardFilters(jobs, requirements, normalization) {
   const accepted = [];
   const rejected = [];
@@ -27,9 +57,11 @@ export function applyHardFilters(jobs, requirements, normalization) {
       pushReason(reasons, 'location', `Location bucket ${normalized.locationBucket} is not allowed`);
     }
 
-    if (!normalized.companySizeBucket) {
-      aiSignals.push('missing_company_size_bucket');
-    } else if (!requirements.must_have_company_size.includes(normalized.companySizeBucket)) {
+    const companySizeDecision = splitCompanySizeDecision(normalized.companySizeBucket, requirements, normalization);
+    if (companySizeDecision.signal) {
+      aiSignals.push(companySizeDecision.signal);
+    }
+    if (!companySizeDecision.accepted) {
       pushReason(reasons, 'companySize', `Company size ${normalized.companySizeBucket} is not allowed`);
     }
 
