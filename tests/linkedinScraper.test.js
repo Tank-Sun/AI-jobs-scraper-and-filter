@@ -7,6 +7,7 @@ const {
   buildSearchResultsPageUrl,
   parseHeaderFromMainText,
   parseCompanySizeFromMainText,
+  parseSalaryFromMainText,
   sanitizeDescription,
 } = __testables;
 
@@ -40,6 +41,13 @@ test("parseCompanySizeFromMainText prefers full employee counts instead of trail
   assert.equal(parseCompanySizeFromMainText("global organization with over 2,000 employees around the world"), "2000+");
   assert.equal(parseCompanySizeFromMainText("Software Development | 51-200 employees | 110 on LinkedIn"), "51-200");
   assert.equal(parseCompanySizeFromMainText("A company with 1001+employees in North America"), "1001+");
+});
+
+
+test("parseSalaryFromMainText extracts explicit annual salary ranges only", () => {
+  assert.equal(parseSalaryFromMainText("Compensation $65K-$90K/yr plus benefits"), "$65,000-$90,000/yr");
+  assert.equal(parseSalaryFromMainText("Expected salary is $72,500 per year"), "$72,500/yr");
+  assert.equal(parseSalaryFromMainText("Pay range is $40-$50/hr"), "");
 });
 
 test("sanitizeDescription trims LinkedIn noise markers", () => {

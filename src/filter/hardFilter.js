@@ -81,6 +81,16 @@ export function applyHardFilters(jobs, requirements, normalization) {
       pushReason(reasons, 'redFlags', 'Description matched a red flag');
     }
 
+
+    if (
+      Number.isFinite(requirements.min_salary_annual) &&
+      normalized.salaryRange &&
+      Number.isFinite(normalized.salaryRange.max) &&
+      normalized.salaryRange.max < requirements.min_salary_annual
+    ) {
+      pushReason(reasons, 'salary', `Annual salary ceiling ${normalized.salaryRange.max} is below minimum ${requirements.min_salary_annual}`);
+    }
+
     const explicitlyTooJunior = matchesAny(normalized.normalizedTitle, ['intern', 'internship', 'junior', 'new grad', 'new graduate', 'entry level', 'entry-level']);
     if (explicitlyTooJunior) {
       pushReason(reasons, 'seniority', 'Title indicates an entry-level role');

@@ -23,6 +23,10 @@ const listKeys = new Set([
   'red_flags',
 ]);
 
+const scalarKeys = new Set([
+  'min_salary_annual',
+]);
+
 const defaultWeights = {
   skills: 40,
   responsibilities: 20,
@@ -46,6 +50,8 @@ function finalizeRequirements(result) {
     ...defaultWeights,
     ...(result.weights ?? {}),
   };
+
+  result.min_salary_annual = Number.isFinite(result.min_salary_annual) ? result.min_salary_annual : null;
 
   const requiredLists = [
     'must_have_locations',
@@ -77,6 +83,13 @@ export async function parseRequirementsFile(filePath) {
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
+      continue;
+    }
+
+    const scalarMatch = /^(\w[\w_]*):\s*(\S.*)$/.exec(trimmed);
+    if (scalarMatch && scalarKeys.has(scalarMatch[1])) {
+      currentKey = null;
+      result[scalarMatch[1]] = Number(scalarMatch[2]);
       continue;
     }
 

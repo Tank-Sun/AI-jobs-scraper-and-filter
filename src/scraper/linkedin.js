@@ -390,6 +390,24 @@ function parseCompanySizeFromMainText(mainText) {
   return exactMatch?.[1].replace(/,/g, '') ?? '';
 }
 
+function parseSalaryFromMainText(mainText) {
+  const normalizedText = normalizeWhitespace(mainText);
+  const annualRangeMatch = normalizedText.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?\s*-\s*\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?\s*(?:\/\s*yr|\/\s*year|per year|annually|a year)\b/i);
+  if (annualRangeMatch) {
+    const low = annualRangeMatch[2] ? Number(annualRangeMatch[1].replace(/,/g, '')) * 1000 : Number(annualRangeMatch[1].replace(/,/g, ''));
+    const high = annualRangeMatch[4] ? Number(annualRangeMatch[3].replace(/,/g, '')) * 1000 : Number(annualRangeMatch[3].replace(/,/g, ''));
+    return `$$${Math.round(low).toLocaleString()}-$$${Math.round(high).toLocaleString()}/yr`.replace(/\$\$/g, '$');
+  }
+
+  const annualSingleMatch = normalizedText.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?\s*(?:\/\s*yr|\/\s*year|per year|annually|a year)\b/i);
+  if (annualSingleMatch) {
+    const value = annualSingleMatch[2] ? Number(annualSingleMatch[1].replace(/,/g, '')) * 1000 : Number(annualSingleMatch[1].replace(/,/g, ''));
+    return `$$${Math.round(value).toLocaleString()}/yr`.replace(/\$\$/g, '$');
+  }
+
+  return '';
+}
+
 async function scrapeJobDetail(page, jobUrl) {
   await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(2200);
@@ -399,6 +417,7 @@ async function scrapeJobDetail(page, jobUrl) {
   const header = parseHeaderFromMainText(mainText, pageTitle);
   const descriptionFromText = parseDescriptionFromMainText(mainText);
   const companySizeFromText = parseCompanySizeFromMainText(mainText);
+  const salaryFromText = parseSalaryFromMainText(mainText);
 
   const title = firstNonEmpty(
     await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__job-title, .t-24.job-details-jobs-unified-top-card__job-title')),
@@ -450,6 +469,7 @@ async function scrapeJobDetail(page, jobUrl) {
     employmentType: firstNonEmpty(parsedCriteria.employmentType, header.employmentType),
     visaPolicy: inferVisaPolicy(description),
     companySize: firstNonEmpty(parsedCriteria.companySize, companySizeFromText),
+    salary: salaryFromText,
     description,
     jobUrl,
   };
@@ -510,6 +530,7 @@ export const __testables = {
   parseHeaderFromMainText,
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
+  parseSalaryFromMainText,
   sanitizeDescription,
 };
 

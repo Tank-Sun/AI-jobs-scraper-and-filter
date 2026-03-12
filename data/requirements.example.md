@@ -70,6 +70,8 @@ red_flags:
 - consulting bodyshop
 - early stage startup (<20 employees)
 
+min_salary_annual: 70000
+
 weights:
   skills: 40
   responsibilities: 20
