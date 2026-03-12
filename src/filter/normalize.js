@@ -56,11 +56,19 @@ function normalizeAnnualSalaryRange(value) {
     return null;
   }
 
+  // Be conservative: mixed units like monthly/hourly text should not trigger the annual salary hard filter.
+  if (/(\/\s*(?:hr|hour|mo|month|wk|week)|per\s+(?:hour|month|week)|hourly|monthly|weekly|bi-weekly|biweekly)/i.test(normalized)) {
+    return null;
+  }
+
   const rangeMatch = normalized.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?\s*-\s*\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?/i);
   if (rangeMatch) {
     const low = rangeMatch[2] ? Number(rangeMatch[1].replace(/,/g, '')) * 1000 : Number(rangeMatch[1].replace(/,/g, ''));
     const high = rangeMatch[4] ? Number(rangeMatch[3].replace(/,/g, '')) * 1000 : Number(rangeMatch[3].replace(/,/g, ''));
-    return Number.isFinite(low) && Number.isFinite(high) ? { min: Math.round(low), max: Math.round(high) } : null;
+    if (!Number.isFinite(low) || !Number.isFinite(high) || high < 10000) {
+      return null;
+    }
+    return { min: Math.round(low), max: Math.round(high) };
   }
 
   const singleMatch = normalized.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?/i);
@@ -69,7 +77,10 @@ function normalizeAnnualSalaryRange(value) {
   }
 
   const valueNumber = singleMatch[2] ? Number(singleMatch[1].replace(/,/g, '')) * 1000 : Number(singleMatch[1].replace(/,/g, ''));
-  return Number.isFinite(valueNumber) ? { min: Math.round(valueNumber), max: Math.round(valueNumber) } : null;
+  if (!Number.isFinite(valueNumber) || valueNumber < 10000) {
+    return null;
+  }
+  return { min: Math.round(valueNumber), max: Math.round(valueNumber) };
 }
 
 export async function loadNormalizationConfig(filePath) {

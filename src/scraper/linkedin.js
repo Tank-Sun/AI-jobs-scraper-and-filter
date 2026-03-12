@@ -101,6 +101,16 @@ function extractJobIdFromHref(href) {
   }
 }
 
+async function isNoResultsPage(page) {
+  const cardCount = await page.locator('[data-view-name="job-search-job-card"]').count().catch(() => 0);
+  if (cardCount > 0) {
+    return false;
+  }
+
+  const mainText = await textOrEmpty(page.locator('main')).catch(() => '');
+  return /no results found/i.test(mainText);
+}
+
 async function collectJobLinks(page, limit) {
   const cardSelector = '[data-view-name="job-search-job-card"]';
   const cards = page.locator(cardSelector);
@@ -159,6 +169,10 @@ async function collectJobLinksAcrossPages(page, limit) {
   let stagnantPages = 0;
 
   while (links.length < limit && stagnantPages < 2) {
+    if (await isNoResultsPage(page)) {
+      break;
+    }
+
     await autoScrollJobsList(page);
     const pageLinks = await collectJobLinks(page, limit - links.length);
     let addedThisPage = 0;
@@ -530,6 +544,7 @@ export const __testables = {
   parseHeaderFromMainText,
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
+  isNoResultsPage,
   parseSalaryFromMainText,
   sanitizeDescription,
 };

@@ -5,6 +5,7 @@ import { __testables } from "../src/scraper/linkedin.js";
 
 const {
   buildSearchResultsPageUrl,
+  isNoResultsPage,
   parseHeaderFromMainText,
   parseCompanySizeFromMainText,
   parseSalaryFromMainText,
@@ -21,6 +22,37 @@ test("buildSearchResultsPageUrl removes currentJobId and advances start", () => 
     nextPageUrl,
     "https://www.linkedin.com/jobs/search/?keywords=software+engineer&start=50"
   );
+});
+
+
+test("isNoResultsPage detects empty LinkedIn results pages", async () => {
+  const pageWithNoResults = {
+    locator(selector) {
+      if (selector === '[data-view-name="job-search-job-card"]') {
+        return { count: async () => 0 };
+      }
+      if (selector === 'main') {
+        return {
+          count: async () => 1,
+          first() {
+            return {
+              textContent: async () => 'No results found Try shortening or rephrasing your search.',
+            };
+          },
+        };
+      }
+      throw new Error(`Unexpected selector: ${selector}`);
+    },
+  };
+
+  const pageWithCards = {
+    locator() {
+      return { count: async () => 3 };
+    },
+  };
+
+  assert.equal(await isNoResultsPage(pageWithNoResults), true);
+  assert.equal(await isNoResultsPage(pageWithCards), false);
 });
 
 test("parseHeaderFromMainText splits location, posted time, applicant info, and employment type from main text", () => {
@@ -44,10 +76,11 @@ test("parseCompanySizeFromMainText prefers full employee counts instead of trail
 });
 
 
-test("parseSalaryFromMainText extracts explicit annual salary ranges only", () => {
+test("parseSalaryFromMainText extracts only explicit pure annual salary formats", () => {
   assert.equal(parseSalaryFromMainText("Compensation $65K-$90K/yr plus benefits"), "$65,000-$90,000/yr");
   assert.equal(parseSalaryFromMainText("Expected salary is $72,500 per year"), "$72,500/yr");
   assert.equal(parseSalaryFromMainText("Pay range is $40-$50/hr"), "");
+  assert.equal(parseSalaryFromMainText("Compensation is $4,000 per month ($48,000 per year)"), "");
 });
 
 test("sanitizeDescription trims LinkedIn noise markers", () => {
