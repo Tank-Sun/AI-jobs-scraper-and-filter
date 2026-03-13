@@ -12,6 +12,7 @@ const {
   isLastPaginationPage,
   isNoResultsPage,
   parseHeaderFromMainText,
+  parseTotalResultsCount,
   parseCompanySizeFromMainText,
   parseSalaryFromMainText,
   readCollectedJobLinks,
@@ -29,6 +30,14 @@ test("buildSearchResultsPageUrl removes currentJobId and advances start", () => 
     nextPageUrl,
     "https://www.linkedin.com/jobs/search/?keywords=software+engineer&start=50"
   );
+});
+
+
+test("parseTotalResultsCount returns exact counts and ignores plus-style approximations", () => {
+  assert.equal(parseTotalResultsCount('54 results Alberta, Canada'), 54);
+  assert.equal(parseTotalResultsCount('2,553 results across Canada'), 2553);
+  assert.equal(parseTotalResultsCount('99+ results Alberta, Canada'), null);
+  assert.equal(parseTotalResultsCount('No matching jobs'), null);
 });
 
 
@@ -75,25 +84,70 @@ function createLocator({ count = 1, text = '', attributes = {} } = {}) {
   };
 }
 
-test("isLastPaginationPage detects disabled next button and visible last page number", async () => {
-  const pageWithDisabledNext = {
+test("isLastPaginationPage detects exact final windows, hidden next buttons, and current indicator pages", async () => {
+  const pageWithExactFinalWindow = {
+    url() {
+      return 'https://www.linkedin.com/jobs/search-results/?start=50';
+    },
     locator(selector) {
-      if (selector === '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
-        return createLocator({ attributes: { 'aria-disabled': 'true', class: 'artdeco-pagination__button artdeco-pagination__button--next' } });
+      if (selector === '[data-view-name="job-search-job-card"]') {
+        return createLocator({ count: 4 });
+      }
+      if (selector === 'body') {
+        return createLocator({ text: '54 results Alberta, Canada Previous 1 2 3 Next' });
+      }
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return createLocator({ count: 0 });
       }
       return createLocator({ count: 0 });
     },
   };
 
-  const pageWithLastVisibleNumber = {
+  const pageWithHiddenNext = {
+    url() {
+      return 'https://www.linkedin.com/jobs/search-results/?start=50';
+    },
     locator(selector) {
-      if (selector === '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+      if (selector === '[data-view-name="job-search-job-card"]') {
+        return createLocator({ count: 4 });
+      }
+      if (selector === 'body') {
+        return createLocator({ text: '99+ results Alberta, Canada Previous 1 2 3 Next' });
+      }
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return createLocator({ attributes: { 'data-testid': 'pagination-controls-next-button-hidden' } });
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  const pageWithCurrentIndicatorAtEnd = {
+    url() {
+      return 'https://www.linkedin.com/jobs/search-results/?start=400';
+    },
+    locator(selector) {
+      if (selector === '[data-view-name="job-search-job-card"]') {
+        return createLocator({ count: 25 });
+      }
+      if (selector === 'body') {
+        return createLocator({ text: '99+ results Alberta, Canada Previous 15 16 17 Next' });
+      }
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
         return createLocator({ count: 0 });
       }
-      if (selector === '.jobs-search-two-pane__pagination, .jobs-search-results-list__pagination, .artdeco-pagination') {
-        return createLocator({ text: 'Previous 15 16 17' });
+      if (selector === 'button[data-testid^="pagination-indicator-"]') {
+        return {
+          count: async () => 3,
+          evaluateAll: async () => ['15', '16', '17'],
+          first() {
+            return {
+              textContent: async () => '',
+              getAttribute: async () => null,
+            };
+          },
+        };
       }
-      if (selector === '.artdeco-pagination__indicator--number.active, .artdeco-pagination__indicator.artdeco-pagination__indicator--number.selected, .artdeco-pagination__pages button[aria-current="true"], .artdeco-pagination__pages li.selected, .artdeco-pagination__pages .active') {
+      if (selector === 'button[data-testid^="pagination-indicator-"][aria-current="true"]') {
         return createLocator({ text: '17' });
       }
       return createLocator({ count: 0 });
@@ -101,19 +155,43 @@ test("isLastPaginationPage detects disabled next button and visible last page nu
   };
 
   const pageWithMorePages = {
+    url() {
+      return 'https://www.linkedin.com/jobs/search-results/?start=25';
+    },
     locator(selector) {
-      if (selector === '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
-        return createLocator({ attributes: { class: 'artdeco-pagination__button artdeco-pagination__button--next' } });
+      if (selector === '[data-view-name="job-search-job-card"]') {
+        return createLocator({ count: 25 });
+      }
+      if (selector === 'body') {
+        return createLocator({ text: '54 results Alberta, Canada Previous 1 2 3 Next' });
+      }
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return createLocator({ attributes: { 'data-testid': 'pagination-controls-next-button-visible' } });
+      }
+      if (selector === 'button[data-testid^="pagination-indicator-"]') {
+        return {
+          count: async () => 3,
+          evaluateAll: async () => ['1', '2', '3'],
+          first() {
+            return {
+              textContent: async () => '',
+              getAttribute: async () => null,
+            };
+          },
+        };
+      }
+      if (selector === 'button[data-testid^="pagination-indicator-"][aria-current="true"]') {
+        return createLocator({ text: '2' });
       }
       return createLocator({ count: 0 });
     },
   };
 
-  assert.equal(await isLastPaginationPage(pageWithDisabledNext), true);
-  assert.equal(await isLastPaginationPage(pageWithLastVisibleNumber), true);
+  assert.equal(await isLastPaginationPage(pageWithExactFinalWindow), true);
+  assert.equal(await isLastPaginationPage(pageWithHiddenNext), true);
+  assert.equal(await isLastPaginationPage(pageWithCurrentIndicatorAtEnd), true);
   assert.equal(await isLastPaginationPage(pageWithMorePages), false);
 });
-
 
 test("collected LinkedIn job URLs are persisted per run and filtered on reload", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "linkedin-scraper-"));

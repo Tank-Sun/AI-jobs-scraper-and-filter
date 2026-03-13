@@ -141,17 +141,53 @@ async function isNoResultsPage(page) {
   return /no results found/i.test(mainText);
 }
 
+function parseTotalResultsCount(text) {
+  const match = normalizeWhitespace(text).match(/(\d+(?:,\d{3})*)(\+)?\s+results\b/i);
+  if (!match || match[2]) {
+    return null;
+  }
+
+  return Number(match[1].replace(/,/g, ''));
+}
+
 async function isLastPaginationPage(page) {
-  const nextButton = page.locator('.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]');
+  const start = Number(new URL(page.url()).searchParams.get('start') ?? '0');
+  const cardCount = await page.locator('[data-view-name="job-search-job-card"]').count().catch(() => 0);
+  const summaryText = await textOrEmpty(page.locator('body')).catch(() => '');
+  const totalResults = parseTotalResultsCount(summaryText);
+
+  if (Number.isFinite(totalResults) && cardCount > 0 && start + cardCount >= totalResults) {
+    return true;
+  }
+
+  const nextButton = page.locator('[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]');
   const nextCount = await nextButton.count().catch(() => 0);
   if (nextCount > 0) {
+    const testId = await nextButton.first().getAttribute('data-testid').catch(() => null);
     const disabledAttr = await nextButton.first().getAttribute('disabled').catch(() => null);
     const ariaDisabled = await nextButton.first().getAttribute('aria-disabled').catch(() => null);
     const className = await nextButton.first().getAttribute('class').catch(() => '');
-    return disabledAttr !== null || ariaDisabled === 'true' || /disabled/i.test(className ?? '');
+    if (testId === 'pagination-controls-next-button-hidden') {
+      return true;
+    }
+    if (disabledAttr !== null || ariaDisabled === 'true' || /disabled/i.test(className ?? '')) {
+      return true;
+    }
   }
 
-  const paginationText = await textOrEmpty(page.locator('.jobs-search-two-pane__pagination, .jobs-search-results-list__pagination, .artdeco-pagination')).catch(() => '');
+  const indicatorButtons = page.locator('button[data-testid^="pagination-indicator-"]');
+  const indicatorCount = await indicatorButtons.count().catch(() => 0);
+  if (indicatorCount > 0) {
+    const currentPageText = await textOrEmpty(page.locator('button[data-testid^="pagination-indicator-"][aria-current="true"]')).catch(() => '');
+    const indicatorTexts = await indicatorButtons.evaluateAll((elements) => elements.map((element) => (element.textContent || '').replace(/\s+/g, ' ').trim())).catch(() => []);
+    const pageNumbers = indicatorTexts.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+    const currentPage = Number(currentPageText);
+    if (Number.isFinite(currentPage) && pageNumbers.length > 0) {
+      return currentPage === Math.max(...pageNumbers);
+    }
+  }
+
+  const paginationText = await textOrEmpty(page.locator('.jobs-search-two-pane__pagination, .jobs-search-results-list__pagination, .artdeco-pagination, [data-testid="pagination-controls-list"]')).catch(() => '');
   const currentPageText = await textOrEmpty(page.locator('.artdeco-pagination__indicator--number.active, .artdeco-pagination__indicator.artdeco-pagination__indicator--number.selected, .artdeco-pagination__pages button[aria-current="true"], .artdeco-pagination__pages li.selected, .artdeco-pagination__pages .active')).catch(() => '');
 
   if (!paginationText || !currentPageText) {
@@ -630,6 +666,7 @@ export const __testables = {
   getCollectedJobLinksPath,
   isLastPaginationPage,
   isNoResultsPage,
+  parseTotalResultsCount,
   parseSalaryFromMainText,
   readCollectedJobLinks,
   sanitizeDescription,
