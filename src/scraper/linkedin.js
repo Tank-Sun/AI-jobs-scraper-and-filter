@@ -1,4 +1,5 @@
-﻿import { access, readFile } from 'node:fs/promises';
+import { access, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 import { chromium } from 'playwright';
 
@@ -17,6 +18,35 @@ async function readJobsFromFile(rawJobsPath) {
     }
     throw error;
   }
+}
+
+function getCollectedJobLinksPath(rawJobsPath) {
+  return path.join(path.dirname(rawJobsPath), 'collected-job-links.json');
+}
+
+async function readCollectedJobLinks(rawJobsPath) {
+  const jobLinksPath = getCollectedJobLinksPath(rawJobsPath);
+
+  try {
+    await access(jobLinksPath);
+    const raw = await readFile(jobLinksPath, 'utf8');
+    const links = JSON.parse(raw);
+    if (!Array.isArray(links)) {
+      return [];
+    }
+
+    return links.filter((value) => typeof value === 'string' && value.startsWith('https://www.linkedin.com/jobs/view/'));
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function writeCollectedJobLinks(rawJobsPath, links) {
+  const jobLinksPath = getCollectedJobLinksPath(rawJobsPath);
+  await writeFile(jobLinksPath, `${JSON.stringify(links, null, 2)}\n`, 'utf8');
 }
 
 function normalizeWhitespace(value) {
@@ -111,6 +141,33 @@ async function isNoResultsPage(page) {
   return /no results found/i.test(mainText);
 }
 
+async function isLastPaginationPage(page) {
+  const nextButton = page.locator('.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]');
+  const nextCount = await nextButton.count().catch(() => 0);
+  if (nextCount > 0) {
+    const disabledAttr = await nextButton.first().getAttribute('disabled').catch(() => null);
+    const ariaDisabled = await nextButton.first().getAttribute('aria-disabled').catch(() => null);
+    const className = await nextButton.first().getAttribute('class').catch(() => '');
+    return disabledAttr !== null || ariaDisabled === 'true' || /disabled/i.test(className ?? '');
+  }
+
+  const paginationText = await textOrEmpty(page.locator('.jobs-search-two-pane__pagination, .jobs-search-results-list__pagination, .artdeco-pagination')).catch(() => '');
+  const currentPageText = await textOrEmpty(page.locator('.artdeco-pagination__indicator--number.active, .artdeco-pagination__indicator.artdeco-pagination__indicator--number.selected, .artdeco-pagination__pages button[aria-current="true"], .artdeco-pagination__pages li.selected, .artdeco-pagination__pages .active')).catch(() => '');
+
+  if (!paginationText || !currentPageText) {
+    return false;
+  }
+
+  const pageNumbers = [...paginationText.matchAll(/\b(\d+)\b/g)].map((match) => Number(match[1]));
+  const currentPageMatch = currentPageText.match(/\b(\d+)\b/);
+  if (pageNumbers.length === 0 || !currentPageMatch) {
+    return false;
+  }
+
+  const currentPage = Number(currentPageMatch[1]);
+  return currentPage === Math.max(...pageNumbers);
+}
+
 async function collectJobLinks(page, limit) {
   const cardSelector = '[data-view-name="job-search-job-card"]';
   const cards = page.locator(cardSelector);
@@ -162,9 +219,13 @@ async function collectJobLinks(page, limit) {
   return links;
 }
 
-async function collectJobLinksAcrossPages(page, limit) {
-  const links = [];
-  const seen = new Set();
+async function collectJobLinksAcrossPages(page, limit, options = {}) {
+  const {
+    seedLinks = [],
+    onLinkCollected = null,
+  } = options;
+  const links = [...seedLinks.slice(0, limit)];
+  const seen = new Set(links);
   let start = Number(new URL(page.url()).searchParams.get('start') ?? '0');
   let stagnantPages = 0;
 
@@ -186,12 +247,20 @@ async function collectJobLinksAcrossPages(page, limit) {
       links.push(jobUrl);
       addedThisPage += 1;
 
+      if (typeof onLinkCollected === 'function') {
+        await onLinkCollected(jobUrl, [...links]);
+      }
+
       if (links.length >= limit) {
         break;
       }
     }
 
     if (links.length >= limit) {
+      break;
+    }
+
+    if (await isLastPaginationPage(page)) {
       break;
     }
 
@@ -406,6 +475,11 @@ function parseCompanySizeFromMainText(mainText) {
 
 function parseSalaryFromMainText(mainText) {
   const normalizedText = normalizeWhitespace(mainText);
+  const hasNonAnnualCompSignal = /\b(?:per month|\/\s*mo|\/\s*month|monthly|per hour|\/\s*hr|hourly|per week|weekly|bi-weekly|per day|daily)\b/i.test(normalizedText);
+  if (hasNonAnnualCompSignal) {
+    return '';
+  }
+
   const annualRangeMatch = normalizedText.match(/\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?\s*-\s*\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?\s*(?:\/\s*yr|\/\s*year|per year|annually|a year)\b/i);
   if (annualRangeMatch) {
     const low = annualRangeMatch[2] ? Number(annualRangeMatch[1].replace(/,/g, '')) * 1000 : Number(annualRangeMatch[1].replace(/,/g, ''));
@@ -489,7 +563,7 @@ async function scrapeJobDetail(page, jobUrl) {
   };
 }
 
-async function scrapeJobsViaPlaywright({ cdpUrl, limit }) {
+async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath }) {
   const browser = await chromium.connectOverCDP(cdpUrl);
 
   try {
@@ -500,7 +574,16 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit }) {
 
     const searchPage = await findJobsPage(context);
     await ensureLinkedInJobsPage(searchPage);
-    const jobLinks = await collectJobLinksAcrossPages(searchPage, limit);
+    const existingJobLinks = await readCollectedJobLinks(rawJobsPath);
+    const jobLinks = await collectJobLinksAcrossPages(searchPage, limit, {
+      seedLinks: existingJobLinks,
+      onLinkCollected: async (_jobUrl, allJobLinks) => {
+        await writeCollectedJobLinks(rawJobsPath, allJobLinks);
+      },
+    });
+    if (jobLinks.length > 0) {
+      await writeCollectedJobLinks(rawJobsPath, jobLinks);
+    }
     if (jobLinks.length === 0) {
       throw new Error('No LinkedIn job links were found on the current page.');
     }
@@ -528,7 +611,7 @@ export async function collectJobs({ rawJobsPath, limit = 200, cdpUrl, source = '
 
   if (cdpUrl) {
     try {
-      return await scrapeJobsViaPlaywright({ cdpUrl, limit });
+      return await scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath });
     } catch (error) {
       if (source === 'live') {
         throw error;
@@ -544,9 +627,13 @@ export const __testables = {
   parseHeaderFromMainText,
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
+  getCollectedJobLinksPath,
+  isLastPaginationPage,
   isNoResultsPage,
   parseSalaryFromMainText,
+  readCollectedJobLinks,
   sanitizeDescription,
+  writeCollectedJobLinks,
 };
 
 

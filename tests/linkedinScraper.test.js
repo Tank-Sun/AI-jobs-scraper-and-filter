@@ -1,15 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp, readFile } from "node:fs/promises";
 
 import { __testables } from "../src/scraper/linkedin.js";
 
 const {
   buildSearchResultsPageUrl,
+  getCollectedJobLinksPath,
+  isLastPaginationPage,
   isNoResultsPage,
   parseHeaderFromMainText,
   parseCompanySizeFromMainText,
   parseSalaryFromMainText,
+  readCollectedJobLinks,
   sanitizeDescription,
+  writeCollectedJobLinks,
 } = __testables;
 
 test("buildSearchResultsPageUrl removes currentJobId and advances start", () => {
@@ -53,6 +60,79 @@ test("isNoResultsPage detects empty LinkedIn results pages", async () => {
 
   assert.equal(await isNoResultsPage(pageWithNoResults), true);
   assert.equal(await isNoResultsPage(pageWithCards), false);
+});
+
+
+function createLocator({ count = 1, text = '', attributes = {} } = {}) {
+  return {
+    count: async () => count,
+    first() {
+      return {
+        textContent: async () => text,
+        getAttribute: async (name) => attributes[name] ?? null,
+      };
+    },
+  };
+}
+
+test("isLastPaginationPage detects disabled next button and visible last page number", async () => {
+  const pageWithDisabledNext = {
+    locator(selector) {
+      if (selector === '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return createLocator({ attributes: { 'aria-disabled': 'true', class: 'artdeco-pagination__button artdeco-pagination__button--next' } });
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  const pageWithLastVisibleNumber = {
+    locator(selector) {
+      if (selector === '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return createLocator({ count: 0 });
+      }
+      if (selector === '.jobs-search-two-pane__pagination, .jobs-search-results-list__pagination, .artdeco-pagination') {
+        return createLocator({ text: 'Previous 15 16 17' });
+      }
+      if (selector === '.artdeco-pagination__indicator--number.active, .artdeco-pagination__indicator.artdeco-pagination__indicator--number.selected, .artdeco-pagination__pages button[aria-current="true"], .artdeco-pagination__pages li.selected, .artdeco-pagination__pages .active') {
+        return createLocator({ text: '17' });
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  const pageWithMorePages = {
+    locator(selector) {
+      if (selector === '.artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return createLocator({ attributes: { class: 'artdeco-pagination__button artdeco-pagination__button--next' } });
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  assert.equal(await isLastPaginationPage(pageWithDisabledNext), true);
+  assert.equal(await isLastPaginationPage(pageWithLastVisibleNumber), true);
+  assert.equal(await isLastPaginationPage(pageWithMorePages), false);
+});
+
+
+test("collected LinkedIn job URLs are persisted per run and filtered on reload", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "linkedin-scraper-"));
+  const rawJobsPath = path.join(tempDir, "raw-jobs.json");
+
+  await writeCollectedJobLinks(rawJobsPath, [
+    "https://www.linkedin.com/jobs/view/123/",
+    "https://example.com/not-linkedin",
+    42,
+    "https://www.linkedin.com/jobs/view/456/",
+  ]);
+
+  const savedPath = getCollectedJobLinksPath(rawJobsPath);
+  const savedText = await readFile(savedPath, "utf8");
+  assert.match(savedText, /123/);
+  assert.deepEqual(await readCollectedJobLinks(rawJobsPath), [
+    "https://www.linkedin.com/jobs/view/123/",
+    "https://www.linkedin.com/jobs/view/456/",
+  ]);
 });
 
 test("parseHeaderFromMainText splits location, posted time, applicant info, and employment type from main text", () => {

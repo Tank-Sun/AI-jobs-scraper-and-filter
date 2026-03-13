@@ -82,6 +82,26 @@
 
 6. 只有还不行时，再回管理员 PowerShell 里重跑 portproxy 和防火墙命令。
 
+## 如果 Scrape 卡住
+
+如果 scrape 卡在翻页或最后一页附近，不用从零开始。
+
+现在 live scrape 在收集 LinkedIn job URL 时，会把已经抓到的链接实时写到当前 run 目录里的 `collected-job-links.json`。
+
+例如：
+
+    reports/2026-03-13_09-30-00_MT/collected-job-links.json
+
+如果中途卡住，重新运行时直接指定同一个 runDir：
+
+    node src/cli/index.js --mode=scrape --source=live --runDir=reports/那次卡住的目录名
+
+这样程序会先读取那个目录里已经保存的 `collected-job-links.json`，然后继续抓，不会把前面已经收集到的 URL 白白丢掉。
+
+如果 scrape 已经成功生成了 `raw-jobs.json`，那就不需要重跑 scrape，直接运行 score：
+
+    node src/cli/index.js --mode=score --runDir=reports/那次运行的目录名
+
 这是一个面向 LinkedIn Jobs 的筛选工具。
 它会先从你当前打开的 LinkedIn Jobs 页面抓职位，再做去重、硬过滤和 AI 打分，最后输出 shortlist。
 
