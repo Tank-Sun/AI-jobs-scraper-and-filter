@@ -53,6 +53,12 @@ function selectJobLinksForDetailScrape(existingJobLinks, limit) {
   return existingJobLinks.slice(0, limit);
 }
 
+const LINK_COLLECTION_IDLE_MS = 30_000;
+
+function hasLinkCollectionStalled({ lastLinkAddedAt, collectedCount, now = Date.now(), idleMs = LINK_COLLECTION_IDLE_MS }) {
+  return collectedCount > 0 && now - lastLinkAddedAt >= idleMs;
+}
+
 function normalizeWhitespace(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
@@ -225,7 +231,8 @@ async function isLastPaginationPage(page) {
   return currentPage === Math.max(...pageNumbers);
 }
 
-async function collectJobLinks(page, limit) {
+async function collectJobLinks(page, limit, options = {}) {
+  const { stallState = null } = options;
   const cardSelector = '[data-view-name="job-search-job-card"]';
   const cards = page.locator(cardSelector);
   const cardCount = await cards.count();
@@ -236,12 +243,21 @@ async function collectJobLinks(page, limit) {
   if (selectedJobId) {
     seen.add(selectedJobId);
     links.push(buildLinkedInJobUrl(selectedJobId));
+    if (stallState) {
+      stallState.lastAddedAt = Date.now();
+    }
     if (links.length >= limit) {
       return links;
     }
   }
 
   for (let index = 0; index < Math.min(cardCount, limit * 4); index += 1) {
+    if (stallState && hasLinkCollectionStalled({
+      lastLinkAddedAt: stallState.lastAddedAt,
+      collectedCount: stallState.collectedCount,
+    })) {
+      break;
+    }
     const card = cards.nth(index);
     const cardText = normalizeWhitespace(await card.textContent());
     if (!cardText) {
@@ -277,6 +293,9 @@ async function collectJobLinks(page, limit) {
 
     seen.add(jobId);
     links.push(buildLinkedInJobUrl(jobId));
+    if (stallState) {
+      stallState.lastAddedAt = Date.now();
+    }
     if (links.length >= limit) {
       break;
     }
@@ -292,6 +311,10 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
   } = options;
   const links = [...seedLinks.slice(0, limit)];
   const seen = new Set(links);
+  const stallState = {
+    lastAddedAt: Date.now(),
+    collectedCount: links.length,
+  };
   let start = Number(new URL(page.url()).searchParams.get('start') ?? '0');
   let stagnantPages = 0;
 
@@ -302,7 +325,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
     }
 
     await autoScrollJobsList(page);
-    const pageLinks = await collectJobLinks(page, limit - links.length);
+    const pageLinks = await collectJobLinks(page, limit - links.length, { stallState });
     let addedThisPage = 0;
 
     for (const jobUrl of pageLinks) {
@@ -313,6 +336,8 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
       seen.add(jobUrl);
       links.push(jobUrl);
       addedThisPage += 1;
+      stallState.lastAddedAt = Date.now();
+      stallState.collectedCount = links.length;
 
       if (typeof onLinkCollected === 'function') {
         await onLinkCollected(jobUrl, [...links]);
@@ -324,6 +349,13 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
     }
 
     if (links.length >= limit) {
+      break;
+    }
+
+    if (hasLinkCollectionStalled({
+      lastLinkAddedAt: stallState.lastAddedAt,
+      collectedCount: links.length,
+    })) {
       break;
     }
 
@@ -697,6 +729,7 @@ export const __testables = {
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
   getCollectedJobLinksPath,
+  hasLinkCollectionStalled,
   selectJobLinksForDetailScrape,
   isLastPaginationPage,
   isNoResultsPage,

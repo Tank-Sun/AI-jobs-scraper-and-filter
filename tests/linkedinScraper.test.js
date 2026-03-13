@@ -9,6 +9,7 @@ import { __testables } from "../src/scraper/linkedin.js";
 const {
   buildSearchResultsPageUrl,
   getCollectedJobLinksPath,
+  hasLinkCollectionStalled,
   isLastPaginationPage,
   isNoResultsPage,
   selectJobLinksForDetailScrape,
@@ -227,6 +228,13 @@ test("selectJobLinksForDetailScrape reuses saved links and respects the limit", 
     "https://www.linkedin.com/jobs/view/456/",
   ]);
   assert.deepEqual(selectJobLinksForDetailScrape(links, 10), links);
+});
+
+
+test("hasLinkCollectionStalled only trips after 30 seconds with at least one saved link", () => {
+  assert.equal(hasLinkCollectionStalled({ lastLinkAddedAt: 0, collectedCount: 0, now: 30_000 }), false);
+  assert.equal(hasLinkCollectionStalled({ lastLinkAddedAt: 10_000, collectedCount: 5, now: 39_999 }), false);
+  assert.equal(hasLinkCollectionStalled({ lastLinkAddedAt: 10_000, collectedCount: 5, now: 40_000 }), true);
 });
 
 test("parseHeaderFromMainText splits location, posted time, applicant info, and employment type from main text", () => {
