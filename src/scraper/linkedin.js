@@ -49,6 +49,10 @@ async function writeCollectedJobLinks(rawJobsPath, links) {
   await writeFile(jobLinksPath, `${JSON.stringify(links, null, 2)}\n`, 'utf8');
 }
 
+function selectJobLinksForDetailScrape(existingJobLinks, limit) {
+  return existingJobLinks.slice(0, limit);
+}
+
 function normalizeWhitespace(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
@@ -79,6 +83,23 @@ async function ensureLinkedInJobsPage(page) {
   const url = page.url();
   if (!url.includes('linkedin.com/jobs')) {
     throw new Error('Open a LinkedIn jobs search page in the connected browser before running the CLI.');
+  }
+}
+
+async function waitForJobCardsOrNoResults(page, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const cardCount = await page.locator('[data-view-name="job-search-job-card"]').count().catch(() => 0);
+    if (cardCount > 0) {
+      return;
+    }
+
+    const mainText = await textOrEmpty(page.locator('main')).catch(() => '');
+    if (/no results found/i.test(mainText)) {
+      return;
+    }
+
+    await page.waitForTimeout(250);
   }
 }
 
@@ -211,6 +232,15 @@ async function collectJobLinks(page, limit) {
   const links = [];
   const seen = new Set();
 
+  const selectedJobId = getCurrentJobIdFromUrl(page.url());
+  if (selectedJobId) {
+    seen.add(selectedJobId);
+    links.push(buildLinkedInJobUrl(selectedJobId));
+    if (links.length >= limit) {
+      return links;
+    }
+  }
+
   for (let index = 0; index < Math.min(cardCount, limit * 4); index += 1) {
     const card = cards.nth(index);
     const cardText = normalizeWhitespace(await card.textContent());
@@ -221,11 +251,11 @@ async function collectJobLinks(page, limit) {
     await card.scrollIntoViewIfNeeded().catch(() => {});
 
     const previousJobId = getCurrentJobIdFromUrl(page.url());
-    await card.click({ timeout: 10000 }).catch(() => {});
+    await card.click({ timeout: 3000 }).catch(() => {});
 
     let jobId = null;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      await page.waitForTimeout(250);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await page.waitForTimeout(200);
       jobId = getCurrentJobIdFromUrl(page.url());
       if (jobId && jobId !== previousJobId) {
         break;
@@ -266,6 +296,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
   let stagnantPages = 0;
 
   while (links.length < limit && stagnantPages < 2) {
+    await waitForJobCardsOrNoResults(page);
     if (await isNoResultsPage(page)) {
       break;
     }
@@ -309,7 +340,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
     }
 
     await page.goto(nextPageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(1800);
+    await waitForJobCardsOrNoResults(page);
   }
 
   return links;
@@ -611,12 +642,14 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath }) {
     const searchPage = await findJobsPage(context);
     await ensureLinkedInJobsPage(searchPage);
     const existingJobLinks = await readCollectedJobLinks(rawJobsPath);
-    const jobLinks = await collectJobLinksAcrossPages(searchPage, limit, {
-      seedLinks: existingJobLinks,
-      onLinkCollected: async (_jobUrl, allJobLinks) => {
-        await writeCollectedJobLinks(rawJobsPath, allJobLinks);
-      },
-    });
+    const jobLinks = existingJobLinks.length > 0
+      ? selectJobLinksForDetailScrape(existingJobLinks, limit)
+      : await collectJobLinksAcrossPages(searchPage, limit, {
+          seedLinks: existingJobLinks,
+          onLinkCollected: async (_jobUrl, allJobLinks) => {
+            await writeCollectedJobLinks(rawJobsPath, allJobLinks);
+          },
+        });
     if (jobLinks.length > 0) {
       await writeCollectedJobLinks(rawJobsPath, jobLinks);
     }
@@ -664,6 +697,7 @@ export const __testables = {
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
   getCollectedJobLinksPath,
+  selectJobLinksForDetailScrape,
   isLastPaginationPage,
   isNoResultsPage,
   parseTotalResultsCount,

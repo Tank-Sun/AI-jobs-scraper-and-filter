@@ -11,6 +11,7 @@ const {
   getCollectedJobLinksPath,
   isLastPaginationPage,
   isNoResultsPage,
+  selectJobLinksForDetailScrape,
   parseHeaderFromMainText,
   parseTotalResultsCount,
   parseCompanySizeFromMainText,
@@ -211,6 +212,21 @@ test("collected LinkedIn job URLs are persisted per run and filtered on reload",
     "https://www.linkedin.com/jobs/view/123/",
     "https://www.linkedin.com/jobs/view/456/",
   ]);
+});
+
+
+test("selectJobLinksForDetailScrape reuses saved links and respects the limit", () => {
+  const links = [
+    "https://www.linkedin.com/jobs/view/123/",
+    "https://www.linkedin.com/jobs/view/456/",
+    "https://www.linkedin.com/jobs/view/789/",
+  ];
+
+  assert.deepEqual(selectJobLinksForDetailScrape(links, 2), [
+    "https://www.linkedin.com/jobs/view/123/",
+    "https://www.linkedin.com/jobs/view/456/",
+  ]);
+  assert.deepEqual(selectJobLinksForDetailScrape(links, 10), links);
 });
 
 test("parseHeaderFromMainText splits location, posted time, applicant info, and employment type from main text", () => {
