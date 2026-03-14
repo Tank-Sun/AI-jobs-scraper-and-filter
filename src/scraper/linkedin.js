@@ -474,7 +474,6 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
     }
 
     await page.goto(nextPageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await waitForJobCardsOrNoResults(page);
   }
 
   return links;
