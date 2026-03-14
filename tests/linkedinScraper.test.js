@@ -9,6 +9,7 @@ import { __testables } from "../src/scraper/linkedin.js";
 const {
   buildSearchResultsPageUrl,
   getCollectedJobLinksPath,
+  getValidJobCardIndexes,
   hasLinkCollectionStalled,
   isLastPaginationPage,
   isNoResultsPage,
@@ -262,6 +263,21 @@ test("extractJobIdFromTrackingScope decodes LinkedIn tracking buffers", () => {
 
   assert.equal(extractJobIdFromTrackingScope(raw), '4384294101');
   assert.equal(extractJobIdFromTrackingScope('not json'), null);
+});
+
+
+test("getValidJobCardIndexes keeps only cards with job signals", async () => {
+  const locator = {
+    evaluateAll: async (fn) => fn([
+      { textContent: '', querySelector: (selector) => selector === '[data-view-tracking-scope]' ? null : null },
+      { textContent: 'Senior Engineer', querySelector: () => null },
+      { textContent: '', querySelector: (selector) => selector === 'a[href]' ? {} : null },
+      { textContent: '', querySelector: (selector) => selector === '[data-view-tracking-scope]' ? {} : null },
+    ]),
+  };
+
+  assert.deepEqual(await getValidJobCardIndexes({}, locator, 4), [1, 2, 3]);
+  assert.deepEqual(await getValidJobCardIndexes({}, locator, 0), []);
 });
 
 test("parseHeaderFromMainText splits location, posted time, applicant info, and employment type from main text", () => {

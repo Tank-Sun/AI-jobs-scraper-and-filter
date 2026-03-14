@@ -99,6 +99,108 @@ async function getJobCardsState(page) {
   };
 }
 
+async function getValidJobCardIndexes(page, locator, count) {
+  if (count === 0) {
+    return [];
+  }
+
+  return locator.evaluateAll((elements) => {
+    const indexes = [];
+    for (const [index, element] of elements.entries()) {
+      const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+      const hasTitle = text.length > 0;
+      const hasHref = Boolean(element.querySelector('a[href]'));
+      const hasTracking = Boolean(element.querySelector('[data-view-tracking-scope]'));
+      if (hasTitle || hasHref || hasTracking) {
+        indexes.push(index);
+      }
+    }
+    return indexes;
+  }).catch(() => Array.from({ length: count }, (_, index) => index));
+}
+
+
+async function inspectJobCards(locator) {
+  return locator.evaluateAll((elements) => {
+    function extractJobIdFromHref(href) {
+      if (!href) {
+        return null;
+      }
+
+      try {
+        const absolute = href.startsWith('http') ? href : new URL(href, 'https://www.linkedin.com').toString();
+        const url = new URL(absolute);
+        const currentJobId = url.searchParams.get('currentJobId');
+        if (currentJobId) {
+          return currentJobId;
+        }
+
+        const viewMatch = url.pathname.match(/\/jobs\/view\/(\d+)/);
+        return viewMatch?.[1] ?? null;
+      } catch {
+        return null;
+      }
+    }
+
+    function extractJobIdFromTrackingScope(raw) {
+      if (!raw) {
+        return null;
+      }
+
+      try {
+        const parsed = JSON.parse(raw);
+        const scopes = Array.isArray(parsed) ? parsed : [parsed];
+        for (const scope of scopes) {
+          const data = scope?.breadcrumb?.content?.data;
+          if (!Array.isArray(data)) {
+            continue;
+          }
+
+          const decoded = new TextDecoder().decode(Uint8Array.from(data));
+          const match = decoded.match(/normalized_jobPosting:(\d+)/);
+          if (match) {
+            return match[1];
+          }
+        }
+      } catch {
+        return null;
+      }
+
+      return null;
+    }
+
+    return elements.flatMap((element, index) => {
+      const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+      const hasText = text.length > 0;
+      if (!hasText && !element.querySelector('a[href]') && !element.querySelector('[data-view-tracking-scope]')) {
+        return [];
+      }
+
+      const trackingValues = [...element.querySelectorAll('[data-view-tracking-scope]')]
+        .map((node) => node.getAttribute('data-view-tracking-scope'))
+        .filter(Boolean);
+      for (const raw of trackingValues) {
+        const jobId = extractJobIdFromTrackingScope(raw);
+        if (jobId) {
+          return [{ index, hasText, jobId }];
+        }
+      }
+
+      const hrefs = [...element.querySelectorAll('a[href]')]
+        .map((node) => node.getAttribute('href'))
+        .filter(Boolean);
+      for (const href of hrefs) {
+        const jobId = extractJobIdFromHref(href);
+        if (jobId) {
+          return [{ index, hasText, jobId }];
+        }
+      }
+
+      return [{ index, hasText, jobId: null }];
+    });
+  }).catch(() => []);
+}
+
 function scoreJobsPageCandidate({ url, cardCount }) {
   let score = Math.min(cardCount, 200);
   if (url.includes('/jobs/search-results/')) {
@@ -339,8 +441,15 @@ async function isLastPaginationPage(page) {
 }
 
 async function collectJobLinks(page, limit, options = {}) {
-  const { stallState = null } = options;
-  const { locator: cards, count: cardCount } = await getJobCardsState(page);
+  const { stallState = null, lastPage = false } = options;
+  const startedAt = Date.now();
+  const { locator: cards } = await getJobCardsState(page);
+  const cardSignals = await inspectJobCards(cards);
+  if (lastPage) {
+    const directCount = cardSignals.filter((signal) => Boolean(signal.jobId)).length;
+    const fallbackCount = cardSignals.filter((signal) => signal.hasText && !signal.jobId).length;
+    console.log(`[scrape] Last page collect: ${cardSignals.length} visible signals, ${directCount} direct ids, ${fallbackCount} fallback candidates`);
+  }
   const links = [];
   const seen = new Set();
 
@@ -356,22 +465,39 @@ async function collectJobLinks(page, limit, options = {}) {
     }
   }
 
-  for (let index = 0; index < Math.min(cardCount, limit * 4); index += 1) {
+  for (const signal of cardSignals) {
+    if (!signal.jobId || seen.has(signal.jobId)) {
+      continue;
+    }
+
+    seen.add(signal.jobId);
+    links.push(buildLinkedInJobUrl(signal.jobId));
+    if (stallState) {
+      stallState.lastAddedAt = Date.now();
+    }
+    if (links.length >= limit) {
+      if (lastPage) {
+        console.log(`[scrape] Last page collect finished in ${Date.now() - startedAt}ms (direct hits filled the page)`);
+      }
+      return links;
+    }
+  }
+
+  for (const signal of cardSignals) {
     if (stallState && hasLinkCollectionStalled({
       lastLinkAddedAt: stallState.lastAddedAt,
       collectedCount: stallState.collectedCount,
     })) {
       break;
     }
-    const card = cards.nth(index);
-    await card.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
-    const cardText = normalizeWhitespace(await card.textContent({ timeout: 1000 }).catch(() => ''));
-    if (!cardText) {
+    if (!signal.hasText || signal.jobId) {
       continue;
     }
 
-    let jobId = await extractJobIdFromCard(card);
+    const card = cards.nth(signal.index);
+    await card.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
 
+    let jobId = await extractJobIdFromCard(card);
     if (!jobId) {
       const previousJobId = getCurrentJobIdFromUrl(page.url());
       await card.click({ timeout: 1500 }).catch(() => {});
@@ -403,6 +529,9 @@ async function collectJobLinks(page, limit, options = {}) {
     }
   }
 
+  if (lastPage) {
+    console.log(`[scrape] Last page collect finished in ${Date.now() - startedAt}ms`);
+  }
   return links;
 }
 
@@ -420,15 +549,8 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
   let start = Number(new URL(page.url()).searchParams.get('start') ?? '0');
   let stagnantPages = 0;
 
-  while (links.length < limit && stagnantPages < 2) {
-    await waitForJobCardsOrNoResults(page);
-    if (await isNoResultsPage(page)) {
-      break;
-    }
-
-    await autoScrollJobsList(page);
-    const pageLinks = await collectJobLinks(page, limit - links.length, { stallState });
-    let addedThisPage = 0;
+  async function mergeCollectedLinks(pageLinks) {
+    let added = 0;
 
     for (const jobUrl of pageLinks) {
       if (seen.has(jobUrl)) {
@@ -437,7 +559,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
 
       seen.add(jobUrl);
       links.push(jobUrl);
-      addedThisPage += 1;
+      added += 1;
       stallState.lastAddedAt = Date.now();
       stallState.collectedCount = links.length;
 
@@ -448,6 +570,36 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
       if (links.length >= limit) {
         break;
       }
+    }
+
+    return added;
+  }
+
+  while (links.length < limit && stagnantPages < 2) {
+    await waitForJobCardsOrNoResults(page);
+    if (await isNoResultsPage(page)) {
+      break;
+    }
+
+    const isLastPageStart = Date.now();
+    const lastPage = await isLastPaginationPage(page);
+    if (lastPage) {
+      console.log(`[scrape] Last page detected after ${Date.now() - isLastPageStart}ms`);
+    }
+
+    let addedThisPage = 0;
+
+    const visibleLinks = await collectJobLinks(page, limit - links.length, { stallState, lastPage });
+    addedThisPage += await mergeCollectedLinks(visibleLinks);
+
+    if (links.length >= limit) {
+      break;
+    }
+
+    if (!lastPage) {
+      await autoScrollJobsList(page);
+      const scrolledLinks = await collectJobLinks(page, limit - links.length, { stallState, lastPage: false });
+      addedThisPage += await mergeCollectedLinks(scrolledLinks);
     }
 
     if (links.length >= limit) {
@@ -461,7 +613,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
       break;
     }
 
-    if (await isLastPaginationPage(page)) {
+    if (lastPage) {
       break;
     }
 
@@ -845,6 +997,7 @@ export const __testables = {
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
   getCollectedJobLinksPath,
+  getValidJobCardIndexes,
   hasLinkCollectionStalled,
   selectJobLinksForDetailScrape,
   isLastPaginationPage,
