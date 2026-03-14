@@ -16,6 +16,7 @@ const {
   parseHeaderFromMainText,
   parseTotalResultsCount,
   parseCompanySizeFromMainText,
+  extractJobIdFromTrackingScope,
   parseSalaryFromMainText,
   readCollectedJobLinks,
   sanitizeDescription,
@@ -44,9 +45,16 @@ test("parseTotalResultsCount returns exact counts and ignores plus-style approxi
 
 
 test("isNoResultsPage detects empty LinkedIn results pages", async () => {
+  const cardSelectors = new Set([
+    'main div[data-display-contents="true"] > div[role="button"]',
+    '[data-view-name="job-search-job-card"]',
+    'li[data-occludable-job-id]',
+    '.jobs-search-results__list-item',
+  ]);
+
   const pageWithNoResults = {
     locator(selector) {
-      if (selector === '[data-view-name="job-search-job-card"]') {
+      if (cardSelectors.has(selector)) {
         return { count: async () => 0 };
       }
       if (selector === 'main') {
@@ -64,8 +72,11 @@ test("isNoResultsPage detects empty LinkedIn results pages", async () => {
   };
 
   const pageWithCards = {
-    locator() {
-      return { count: async () => 3 };
+    locator(selector) {
+      if (cardSelectors.has(selector)) {
+        return { count: async () => (selector === '.jobs-search-results__list-item' ? 3 : 0) };
+      }
+      return { count: async () => 0 };
     },
   };
 
@@ -235,6 +246,22 @@ test("hasLinkCollectionStalled only trips after 30 seconds with at least one sav
   assert.equal(hasLinkCollectionStalled({ lastLinkAddedAt: 0, collectedCount: 0, now: 30_000 }), false);
   assert.equal(hasLinkCollectionStalled({ lastLinkAddedAt: 10_000, collectedCount: 5, now: 39_999 }), false);
   assert.equal(hasLinkCollectionStalled({ lastLinkAddedAt: 10_000, collectedCount: 5, now: 40_000 }), true);
+});
+
+
+test("extractJobIdFromTrackingScope decodes LinkedIn tracking buffers", () => {
+  const raw = JSON.stringify([{
+    contentTrackingId: 'abc',
+    topicName: 'JobImpressionEventV2',
+    breadcrumb: {
+      content: {
+        data: Array.from(Buffer.from('{\"jobPosting\":{\"objectUrn\":\"urn:li:fs_normalized_jobPosting:4384294101\"}}', 'utf8')),
+      },
+    },
+  }]);
+
+  assert.equal(extractJobIdFromTrackingScope(raw), '4384294101');
+  assert.equal(extractJobIdFromTrackingScope('not json'), null);
 });
 
 test("parseHeaderFromMainText splits location, posted time, applicant info, and employment type from main text", () => {
