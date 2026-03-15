@@ -21,12 +21,12 @@ const requirements = {
   negative_skills: ['java'],
   red_flags: ['unpaid'],
   weights: {
-    skills: 40,
+    skills: 45,
     responsibilities: 15,
-    company_quality: 15,
-    title: 10,
-    seniority: 10,
-    growth: 5,
+    company_quality: 5,
+    title: 20,
+    seniority: 7,
+    growth: 3,
     risk: 5,
   },
 };
@@ -90,9 +90,10 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   assert.match(prompt, /Missing explicit mention of TypeScript, React, or Node\.js should be treated as uncertainty, not as an automatic rejection/);
   assert.match(prompt, /Do not reject merely because avoid-list technologies appear somewhere in the posting\./);
   assert.match(prompt, /Missing metadata and unconfirmed skills are not disqualifiers by themselves\./);
+  assert.match(prompt, /If both title fit and core stack fit are clearly weak, reject even if the company or AI domain sounds attractive\./);
 });
 
-const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, mergeAiAndHeuristicScores, normalizeGeminiResult, riskScore } = __testables;
+const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, hasAiProductSignal, hasCriticalTitleAndSkillMismatch, hasDevexSignal, hasStrongProductSignal, heuristicScore, mergeAiAndHeuristicScores, normalizeGeminiResult, riskScore } = __testables;
 
 test('hasAiProductSignal boosts AI application roles but not model-training or platform roles', () => {
   assert.equal(
@@ -151,6 +152,29 @@ test('scoreJobs keeps low-scoring accepted jobs in scored results instead of aiR
   assert.equal(result.scored.length, 1);
   assert.equal(result.scored[0].modelDecision, 'reject');
   assert.ok(result.scored[0].totalScore < 60);
+});
+
+
+test('hasCriticalTitleAndSkillMismatch flags only clear title and skills mismatches', () => {
+  assert.equal(
+    hasCriticalTitleAndSkillMismatch({
+      breakdown: {
+        skills: 28,
+        title: 12,
+      },
+    }),
+    true
+  );
+
+  assert.equal(
+    hasCriticalTitleAndSkillMismatch({
+      breakdown: {
+        skills: 52,
+        title: 12,
+      },
+    }),
+    false
+  );
 });
 
 test('heuristicScore prefers full stack over fitted backend over frontend-only roles', () => {
@@ -468,7 +492,7 @@ test('mergeAiAndHeuristicScores tempers overly optimistic AI scores with heurist
     requirements.weights
   );
 
-  assert.equal(merged.totalScore, 54);
+  assert.equal(merged.totalScore, 52);
   assert.deepEqual(merged.breakdown, {
     skills: 46,
     responsibilities: 52,
@@ -500,7 +524,7 @@ test('normalizeGeminiResult scales 1-10 Gemini scores up to 0-100 and recomputes
     gaps: ['kubernetes'],
   }, requirements.weights);
 
-  assert.equal(normalized.totalScore, 82);
+  assert.equal(normalized.totalScore, 85);
   assert.deepEqual(normalized.breakdown, {
     skills: 90,
     responsibilities: 80,
@@ -530,7 +554,7 @@ test('normalizeGeminiResult ignores inconsistent Gemini total_score and recomput
     gaps: [],
   }, requirements.weights);
 
-  assert.equal(normalized.totalScore, 84);
+  assert.equal(normalized.totalScore, 86);
   assert.deepEqual(normalized.breakdown, {
     skills: 90,
     responsibilities: 85,
@@ -553,7 +577,7 @@ test('calculateWeightedTotalScore matches the documented requirements weights', 
     risk: 60,
   };
 
-  assert.equal(calculateWeightedTotalScore(breakdown, requirements.weights), 84);
+  assert.equal(calculateWeightedTotalScore(breakdown, requirements.weights), 86);
 });
 
 test('scoreJobs persists and reuses scoring cache entries', async () => {

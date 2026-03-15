@@ -6,7 +6,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SCORE_CONCURRENCY = 4;
-const SCORING_SIGNATURE_VERSION = '2026-03-11-score-only-ai-product-v10';
+const SCORING_SIGNATURE_VERSION = '2026-03-14-title-skill-priority-v11';
 const AI_HEURISTIC_BLEND_RATIO = 0.4;
 
 const PRODUCT_ENGINEERING_TERMS = [
@@ -272,7 +272,7 @@ function skillCoverageScore(job, requirements, resume) {
   const avoidRatioPenalty = ratioOfTerms(text, AVOID_DIRECTION_TERMS) * 25;
   const nativeMobilePenalty = nativeMobileRatio(job) * 55;
   const reactNativePenalty = hasReactNativeSignal(job) ? 8 : 0;
-  const missingCorePenalty = mustHaveCoverage === 0 && !hasAiProductSignal(job) ? 15 : 0;
+  const missingCorePenalty = mustHaveCoverage === 0 && !hasAiProductSignal(job) ? 22 : 0;
   return clampScore((mustHaveCoverage * 0.55 + niceToHaveRatio * 0.15 + resumeRatio * 0.3) * 100 + fullStackBoost + backendBoost + frontendBoost + frontendAiBoost - negativePenalty - avoidRatioPenalty - nativeMobilePenalty - reactNativePenalty - missingCorePenalty - pseudoFullStackPenalty);
 }
 
@@ -510,6 +510,9 @@ function titleAlignmentScore(job, requirements) {
   if (normalizedTitle.includes('java') || normalizedTitle.includes('.net') || normalizedTitle.includes('c++')) {
     score -= 18;
   }
+  if ((job.aiSignals ?? []).includes('title_not_in_preferred_lists')) {
+    score -= 12;
+  }
 
   return clampScore(score);
 }
@@ -570,15 +573,16 @@ function buildGeminiPrompt(job, requirements, resume) {
     '- Strong positive signal if the company is building AI products or the role clearly ships AI-powered features to users. Prefer these when the rest of the role is also a fit.',
     '- Treat AI application/product work as much stronger than AI infra, ML platform, model training, research, or backend-only AI roles that are detached from user-facing product engineering.',
     '- Do not give the same boost to AI strategy, AI consulting, or backend/infra/platform work that is detached from product-facing engineering.',
+    '- If both title fit and core stack fit are clearly weak, reject even if the company or AI domain sounds attractive.',
     '- If title fit, core stack fit, and day-to-day work are all weak or ambiguous, reject rather than giving the benefit of the doubt.',
     '- Treat evergreen or generic future-opportunity postings more skeptically unless the role still looks unusually aligned.',
     '- Use aiSignals as weak hints about uncertainty or possible concerns. Missing metadata and unconfirmed skills are not disqualifiers by themselves.',
     '',
     'Scoring guidance:',
-    "- skills: how well the role matches the candidate's actual strengths and primary required stack, not every incidental technology mentioned in the posting.",
+    "- skills: how well the role matches the candidate's actual strengths and primary required stack, not every incidental technology mentioned in the posting. This is one of the highest-priority dimensions.",
     '- responsibilities: how well the actual work matches product/full-stack/frontend/AI application engineering goals. Give extra credit for shipping AI-powered product features.',
     '- company_quality: domain and company context fit, treated as secondary to the role itself. Give extra credit to AI product companies, but not just any AI-adjacent consulting or infrastructure work.',
-    '- title: how well the title aligns with the target or acceptable titles.',
+    '- title: how well the title aligns with the target or acceptable titles. This is one of the highest-priority dimensions.',
     '- seniority: whether the expected level is a good fit for mid-level to senior roles.',
     '- growth: whether the role appears to offer strong ownership, scope, and learning potential.',
     '- risk: penalize unclear fit, heavy mismatch to avoid-list directions, consulting/bodyshop signals, or noisy/ambiguous postings.',
@@ -773,6 +777,19 @@ function normalizeGeminiResult(parsed, weights) {
   };
 }
 
+
+function hasCriticalTitleAndSkillMismatch(result) {
+  return (result.breakdown?.title ?? 100) <= 20 && (result.breakdown?.skills ?? 100) <= 35;
+}
+
+function toAiRejectionReasons(result) {
+  return [
+    { field: 'aiDecision', message: result.rejectReason || 'AI rejected this role because title and core skills fit were too weak.' },
+    { field: 'title', message: `Title fit score ${result.breakdown.title} is too low` },
+    { field: 'skills', message: `Skills fit score ${result.breakdown.skills} is too low` },
+  ];
+}
+
 function buildCacheEntry({ key, signature, mode, status, result, reasons, message, originalMessage }) {
   return {
     key,
@@ -858,6 +875,29 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
     const result = apiKey
       ? mergeAiAndHeuristicScores(await callGemini({ apiKey, model, job, requirements, resume }), heuristic, requirements.weights)
       : heuristic;
+
+    if (apiKey && result.decision !== 'shortlist' && hasCriticalTitleAndSkillMismatch(result)) {
+      const reasons = toAiRejectionReasons(result);
+      const rejectedResult = {
+        ...result,
+        modelDecision: result.decision,
+        decision: 'reject',
+      };
+
+      cache.entries[cacheKey] = buildCacheEntry({
+        key: cacheKey,
+        signature,
+        mode: scoringMode,
+        status: 'rejected',
+        result: rejectedResult,
+        reasons,
+      });
+
+      return {
+        type: 'rejected',
+        value: { ...job, ...rejectedResult, reasons },
+      };
+    }
 
     const scoredResult = {
       ...result,
@@ -983,6 +1023,8 @@ export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) 
   for (const result of results) {
     if (result.type === 'scored') {
       scored.push(result.value);
+    } else if (result.type === 'rejected') {
+      aiRejected.push(result.value);
     } else if (result.type === 'failed') {
       failures.push(result.value);
     }
@@ -997,6 +1039,7 @@ export const __testables = {
   buildScoreSignature,
   calculateWeightedTotalScore,
   hasAiProductSignal,
+  hasCriticalTitleAndSkillMismatch,
   hasDevexSignal,
   hasStrongProductSignal,
   heuristicScore,

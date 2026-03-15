@@ -49,12 +49,12 @@ red_flags:
   - unpaid
 
 weights:
-  skills: 40
-  responsibilities: 20
-  company_quality: 10
-  title: 10
-  seniority: 10
-  growth: 5
+  skills: 45
+  responsibilities: 15
+  company_quality: 5
+  title: 20
+  seniority: 7
+  growth: 3
   risk: 5
 `,
     'utf8'
@@ -62,7 +62,10 @@ weights:
 
   const parsed = await parseRequirementsFile(target);
   assert.deepEqual(parsed.must_have_locations, ['remote-us']);
-  assert.deepEqual(parsed.visa_policy, ['tn-eligible']);  assert.equal(parsed.weights.company_quality, 10);
-  assert.equal(parsed.weights.responsibilities, 20);
+  assert.deepEqual(parsed.visa_policy, ['tn-eligible']);
+  assert.equal(parsed.weights.skills, 45);
+  assert.equal(parsed.weights.title, 20);
+  assert.equal(parsed.weights.company_quality, 5);
+  assert.equal(parsed.weights.responsibilities, 15);
   assert.deepEqual(parsed.all_titles, ['software engineer', 'senior software engineer']);
 });

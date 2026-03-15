@@ -26,12 +26,12 @@ const listKeys = new Set([
 const scalarKeys = new Set();
 
 const defaultWeights = {
-  skills: 40,
-  responsibilities: 20,
-  company_quality: 10,
-  title: 10,
-  seniority: 10,
-  growth: 5,
+  skills: 45,
+  responsibilities: 15,
+  company_quality: 5,
+  title: 20,
+  seniority: 7,
+  growth: 3,
   risk: 5,
 };
 
