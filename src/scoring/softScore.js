@@ -395,8 +395,33 @@ function hasFrontendAiProductSignal(job) {
   return frontendSignal(job) > 0 && hasAiProductSignal(job) && (hasStrongProductSignal(job) || text.includes('ship features') || text.includes('user-facing') || text.includes('customer-facing'));
 }
 
+
+function companySizeBucket(job) {
+  const rawBucket = String(job.companySize ?? '').trim().toLowerCase();
+  return job.normalized?.companySizeBucket ?? (rawBucket || null);
+}
+
+function companySizePreferenceAdjustment(job) {
+  const bucket = companySizeBucket(job);
+
+  if (bucket === '1001-5000') {
+    return { companyQualityPenalty: 10, riskPenalty: 6, growthPenalty: 3 };
+  }
+
+  if (bucket === '5000+') {
+    return { companyQualityPenalty: 20, riskPenalty: 12, growthPenalty: 8 };
+  }
+
+  if ((job.aiSignals ?? []).includes('company_size_outside_preferred_range')) {
+    return { companyQualityPenalty: 12, riskPenalty: 8, growthPenalty: 4 };
+  }
+
+  return { companyQualityPenalty: 0, riskPenalty: 0, growthPenalty: 0 };
+}
+
 function companyQualityScore(job, requirements) {
   const text = jobText(job);
+  const { companyQualityPenalty } = companySizePreferenceAdjustment(job);
   if (ratioOfTerms(text, CONSULTING_TERMS) > 0) {
     return 20;
   }
@@ -404,19 +429,19 @@ function companyQualityScore(job, requirements) {
     return 35;
   }
   if (hasInternalToolsSignal(job) && !hasDevexSignal(job)) {
-    return hasFrontendAiProductSignal(job) ? 55 : 30;
+    return clampScore((hasFrontendAiProductSignal(job) ? 55 : 30) - companyQualityPenalty);
   }
   if (hasAiProductSignal(job)) {
-    return (job.aiSignals ?? []).includes('company_size_outside_preferred_range') ? 82 : 92;
+    return clampScore(92 - companyQualityPenalty);
   }
   if (hasStrongProductSignal(job) || fullStackSignal(job) > 0.12) {
-    return (job.aiSignals ?? []).includes('company_size_outside_preferred_range') ? 74 : 84;
+    return clampScore(84 - companyQualityPenalty);
   }
   if (ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 || backendPlatformRatio(job) > 0.15) {
-    return (job.aiSignals ?? []).includes('company_size_outside_preferred_range') ? 34 : 42;
+    return clampScore(42 - companyQualityPenalty);
   }
   const baseScore = requirements.industry_preferences.some((preference) => text.includes(preference)) ? 80 : 55;
-  return clampScore((job.aiSignals ?? []).includes('company_size_outside_preferred_range') ? baseScore - 10 : baseScore);
+  return clampScore(baseScore - companyQualityPenalty);
 }
 
 function riskScore(job) {
@@ -424,7 +449,7 @@ function riskScore(job) {
   const signalPenaltyByType = {
     missing_location_bucket: 2,
     missing_company_size_bucket: 0,
-    company_size_outside_preferred_range: 10,
+    company_size_outside_preferred_range: 0,
     ai_company_size_override: 0,
     missing_employment_type_bucket: 0,
     missing_visa_bucket: 0,
@@ -436,6 +461,7 @@ function riskScore(job) {
     (job.aiSignals ?? []).reduce((total, signal) => total + (signalPenaltyByType[signal] ?? 3), 0),
     24
   );
+  const { riskPenalty: companySizeRiskPenalty } = companySizePreferenceAdjustment(job);
   const negativePenalty = Math.min((job.negativeSkillMatches?.length ?? 0) * 12, 36);
   const consultingPenalty = ratioOfTerms(text, CONSULTING_TERMS) > 0 ? 22 : 0;
   const evergreenPenalty = ratioOfTerms(text, EVERGREEN_TERMS) > 0 ? 12 : 0;
@@ -444,7 +470,7 @@ function riskScore(job) {
   const pseudoFullStackPenalty = hasWrongFullStackSignal(job) ? 12 : 0;
   const nativeMobilePenalty = nativeMobileRatio(job) * 42;
   const reactNativePenalty = hasReactNativeSignal(job) ? 6 : 0;
-  return clampScore(95 - signalPenalty - negativePenalty - consultingPenalty - evergreenPenalty - infraPenalty - backendPlatformPenalty - pseudoFullStackPenalty - nativeMobilePenalty - reactNativePenalty);
+  return clampScore(95 - signalPenalty - companySizeRiskPenalty - negativePenalty - consultingPenalty - evergreenPenalty - infraPenalty - backendPlatformPenalty - pseudoFullStackPenalty - nativeMobilePenalty - reactNativePenalty);
 }
 
 function calculateWeightedTotalScore(breakdown, weights) {
@@ -525,7 +551,8 @@ function titleAlignmentScore(job, requirements) {
 function heuristicScore(job, requirements, resume) {
   const weights = requirements.weights;
   const growthBase = (job.description ?? '').toLowerCase().includes('growth') ? 80 : 45;
-  const growthPenalty = (hasAiModelingOrInfraSignal(job) || backendPlatformRatio(job) > 0.15) && !hasFrontendAiProductSignal(job) ? 18 : 0;
+  const { growthPenalty: companySizeGrowthPenalty } = companySizePreferenceAdjustment(job);
+  const growthPenalty = ((hasAiModelingOrInfraSignal(job) || backendPlatformRatio(job) > 0.15) && !hasFrontendAiProductSignal(job) ? 18 : 0) + companySizeGrowthPenalty;
   const productGrowthBoost = hasStrongProductSignal(job) ? 10 : 0;
   const frontendAiGrowthBoost = hasFrontendAiProductSignal(job) ? 10 : 0;
   const breakdown = {
