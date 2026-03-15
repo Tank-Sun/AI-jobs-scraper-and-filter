@@ -16,6 +16,35 @@ function matchingTerms(text, terms) {
   return terms.filter((term) => text.includes(term));
 }
 
+
+function extractMinimumExperienceYears(job) {
+  const text = [job.normalized?.normalizedTitle, job.normalized?.normalizedDescription, job.title, job.description]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  const patterns = [
+    /(?:minimum|min\.?|at least)\s+(\d{1,2})\+?\s*(?:years?|yrs?)\s+(?:of\s+)?experience/g,
+    /(\d{1,2})\+\s*(?:years?|yrs?)\s+(?:of\s+)?experience/g,
+    /(\d{1,2})\s*\+\s*years/g,
+    /(\d{1,2})\s*-\s*(\d{1,2})\s*(?:years?|yrs?)\s+(?:of\s+)?experience/g,
+    /(?:requires|required|requirement)\s+(\d{1,2})\+?\s*(?:years?|yrs?)\s+(?:of\s+)?experience/g,
+  ];
+
+  let minimum = null;
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const years = Number(match[1]);
+      if (!Number.isFinite(years)) {
+        continue;
+      }
+      minimum = minimum == null ? years : Math.min(minimum, years);
+    }
+  }
+
+  return minimum;
+}
+
 function getCompanySizeRange(bucket, normalization) {
   return normalization.companySizeBands?.[bucket] ?? null;
 }
@@ -119,6 +148,10 @@ export function applyHardFilters(jobs, requirements, normalization) {
       pushReason(reasons, 'redFlags', `Matched red flags: ${matchedRedFlags.join(', ')}`);
     }
 
+    const minimumExperienceYears = extractMinimumExperienceYears({ ...job, normalized });
+    if (minimumExperienceYears != null && minimumExperienceYears > 5) {
+      pushReason(reasons, 'experience', `Role explicitly requires ${minimumExperienceYears}+ years of experience`);
+    }
 
     const explicitlyTooJunior = matchesAny(normalized.normalizedTitle, ['intern', 'internship', 'junior', 'new grad', 'new graduate', 'entry level', 'entry-level']);
     if (explicitlyTooJunior) {

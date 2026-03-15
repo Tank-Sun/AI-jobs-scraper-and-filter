@@ -208,6 +208,48 @@ test('applyHardFilters rejects data science and ML modeling titles outside the t
   assert.match(result.rejected.map((job) => job.reasons.map((item) => item.field).join(',')).join(','), /title/);
 });
 
+
+test('applyHardFilters rejects roles with explicit experience requirements above five years but keeps ambiguous ones', () => {
+  const jobs = [
+    {
+      title: 'Software Engineer',
+      company: 'BigCo',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'TN eligible',
+      companySize: '201-500',
+      description: 'Requires 7+ years of experience building backend services with TypeScript and Node.js.',
+      jobUrl: 'https://example.com/exp-too-high',
+    },
+    {
+      title: 'Senior Software Engineer',
+      company: 'Acme',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'TN eligible',
+      companySize: '201-500',
+      description: 'Strong product engineering background preferred. Senior role with TypeScript and React.',
+      jobUrl: 'https://example.com/exp-ambiguous',
+    },
+    {
+      title: 'Software Engineer',
+      company: 'RangeCo',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'TN eligible',
+      companySize: '201-500',
+      description: 'Minimum 4-6 years of experience with TypeScript, React, and Node.js.',
+      jobUrl: 'https://example.com/exp-range',
+    },
+  ];
+
+  const result = applyHardFilters(jobs, requirements, normalization);
+  assert.equal(result.accepted.length, 2);
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /experience/);
+  assert.match(result.rejected[0].reasons.find((item) => item.field === 'experience').message, /7\+/);
+});
+
 test('applyHardFilters rejects explicit hard filter mismatches', () => {
   const jobs = [
     {
