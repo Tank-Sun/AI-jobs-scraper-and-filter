@@ -36,9 +36,7 @@ const requirements = {
   nice_to_have_skills: ['playwright'],
   industry_preferences: ['ai'],
   negative_skills: ['java'],
-  red_flags: ['unpaid'],
-  min_salary_annual: 70000,
-  weights: {
+  red_flags: ['unpaid'],  weights: {
     skills: 40,
     responsibilities: 15,
     company_quality: 15,
@@ -176,56 +174,4 @@ test('applyHardFilters rejects explicit hard filter mismatches', () => {
   assert.equal(result.accepted.length, 0);
   assert.equal(result.rejected.length, 1);
   assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /location|redFlags/);
-});
-
-
-test('applyHardFilters rejects only salary ranges fully below the configured minimum and ignores missing salary', () => {
-  const belowMinimum = [{
-    title: 'Software Engineer',
-    company: 'BudgetCo',
-    location: 'Remote',
-    employmentType: 'Full-Time',
-    visaPolicy: 'TN eligible',
-    companySize: '51-200',
-    salary: '$50,000-$65,000/yr',
-    description: 'Typescript React Node.js role',
-    jobUrl: 'https://example.com/salary-low',
-  }];
-
-  const lowResult = applyHardFilters(belowMinimum, requirements, normalization);
-  assert.equal(lowResult.accepted.length, 0);
-  assert.equal(lowResult.rejected.length, 1);
-  assert.match(lowResult.rejected[0].reasons.map((item) => item.field).join(','), /salary/);
-
-  const overlappingSalary = [{
-    title: 'Software Engineer',
-    company: 'StretchCo',
-    location: 'Remote',
-    employmentType: 'Full-Time',
-    visaPolicy: 'TN eligible',
-    companySize: '51-200',
-    salary: '$65,000-$90,000/yr',
-    description: 'Typescript React Node.js role',
-    jobUrl: 'https://example.com/salary-overlap',
-  }];
-
-  const overlapResult = applyHardFilters(overlappingSalary, requirements, normalization);
-  assert.equal(overlapResult.accepted.length, 1);
-  assert.equal(overlapResult.rejected.length, 0);
-
-  const missingSalary = [{
-    title: 'Software Engineer',
-    company: 'UnknownPayCo',
-    location: 'Remote',
-    employmentType: 'Full-Time',
-    visaPolicy: 'TN eligible',
-    companySize: '51-200',
-    salary: '',
-    description: 'Typescript React Node.js role',
-    jobUrl: 'https://example.com/salary-missing',
-  }];
-
-  const missingResult = applyHardFilters(missingSalary, requirements, normalization);
-  assert.equal(missingResult.accepted.length, 1);
-  assert.equal(missingResult.rejected.length, 0);
 });

@@ -48,8 +48,6 @@ negative_skills:
 red_flags:
   - unpaid
 
-min_salary_annual: 70000
-
 weights:
   skills: 40
   responsibilities: 20
@@ -64,9 +62,7 @@ weights:
 
   const parsed = await parseRequirementsFile(target);
   assert.deepEqual(parsed.must_have_locations, ['remote-us']);
-  assert.deepEqual(parsed.visa_policy, ['tn-eligible']);
-  assert.equal(parsed.min_salary_annual, 70000);
-  assert.equal(parsed.weights.company_quality, 10);
+  assert.deepEqual(parsed.visa_policy, ['tn-eligible']);  assert.equal(parsed.weights.company_quality, 10);
   assert.equal(parsed.weights.responsibilities, 20);
   assert.deepEqual(parsed.all_titles, ['software engineer', 'senior software engineer']);
 });

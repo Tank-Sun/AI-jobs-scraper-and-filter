@@ -23,9 +23,7 @@ const listKeys = new Set([
   'red_flags',
 ]);
 
-const scalarKeys = new Set([
-  'min_salary_annual',
-]);
+const scalarKeys = new Set();
 
 const defaultWeights = {
   skills: 40,
@@ -50,8 +48,6 @@ function finalizeRequirements(result) {
     ...defaultWeights,
     ...(result.weights ?? {}),
   };
-
-  result.min_salary_annual = Number.isFinite(result.min_salary_annual) ? result.min_salary_annual : null;
 
   const requiredLists = [
     'must_have_locations',
