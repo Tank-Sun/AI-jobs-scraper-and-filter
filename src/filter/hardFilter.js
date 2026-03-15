@@ -130,6 +130,17 @@ export function applyHardFilters(jobs, requirements, normalization) {
       pushReason(reasons, 'seniority', 'Title indicates a role above the target experience range');
     }
 
+    const explicitlyWrongDiscipline = matchesAny(normalized.normalizedTitle, [
+      'data scientist',
+      'research scientist',
+      'applied scientist',
+      'ml engineer',
+      'machine learning engineer',
+    ]);
+    if (explicitlyWrongDiscipline) {
+      pushReason(reasons, 'title', 'Title indicates a data science or ML modeling role outside the target scope');
+    }
+
     if (requirements.all_titles.length > 0 && !includesAny(normalized.normalizedTitle, requirements.all_titles)) {
       aiSignals.push('title_not_in_preferred_lists');
     }

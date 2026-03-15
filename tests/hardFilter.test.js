@@ -177,6 +177,37 @@ test('applyHardFilters rejects titles that are clearly outside the target experi
   assert.match(result.rejected.map((job) => job.reasons.map((item) => item.field).join(',')).join(','), /seniority/);
 });
 
+
+test('applyHardFilters rejects data science and ML modeling titles outside the target scope', () => {
+  const jobs = [
+    {
+      title: 'Senior Data Scientist',
+      company: 'Clio',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'TN eligible',
+      companySize: '201-500',
+      description: 'Build machine learning systems for product teams.',
+      jobUrl: 'https://example.com/data-scientist',
+    },
+    {
+      title: 'Machine Learning Engineer',
+      company: 'AiInfraCo',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'TN eligible',
+      companySize: '201-500',
+      description: 'Build model training and inference infrastructure.',
+      jobUrl: 'https://example.com/ml-engineer',
+    },
+  ];
+
+  const result = applyHardFilters(jobs, requirements, normalization);
+  assert.equal(result.accepted.length, 0);
+  assert.equal(result.rejected.length, 2);
+  assert.match(result.rejected.map((job) => job.reasons.map((item) => item.field).join(',')).join(','), /title/);
+});
+
 test('applyHardFilters rejects explicit hard filter mismatches', () => {
   const jobs = [
     {
