@@ -395,10 +395,19 @@ test('devex and product signals outrank generic internal tools signals', () => {
   assert.ok(devexRole.breakdown.responsibilities > internalToolsRole.breakdown.responsibilities);
 });
 
-test('seniorityScore prefers mid-to-senior roles over junior or staff titles', () => {
+test('seniorityScore prefers mid roles over senior, and senior over junior or staff titles', () => {
   const mid = heuristicScore({
     ...jobs[0],
     title: 'Software Engineer II',
+    description: 'TypeScript React Node.js product engineering role',
+    aiSignals: [],
+    mustHaveSkillMatches: ['typescript'],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  const senior = heuristicScore({
+    ...jobs[0],
+    title: 'Senior Software Engineer',
     description: 'TypeScript React Node.js product engineering role',
     aiSignals: [],
     mustHaveSkillMatches: ['typescript'],
@@ -423,8 +432,9 @@ test('seniorityScore prefers mid-to-senior roles over junior or staff titles', (
     negativeSkillMatches: [],
   }, requirements, resume);
 
-  assert.ok(mid.breakdown.seniority > junior.breakdown.seniority);
-  assert.ok(mid.breakdown.seniority > staff.breakdown.seniority);
+  assert.ok(mid.breakdown.seniority > senior.breakdown.seniority);
+  assert.ok(senior.breakdown.seniority > junior.breakdown.seniority);
+  assert.ok(senior.breakdown.seniority > staff.breakdown.seniority);
 });
 
 test('heuristicScore ranks strong AI product full-stack roles above consulting .NET roles', () => {

@@ -290,9 +290,14 @@ function seniorityScore(job, requirements) {
     return normalizedTitle.includes('staff') || normalizedTitle.includes('principal') ? 35 : 25;
   }
 
-  const preferredLevels = ['mid', 'mid-level', 'intermediate', 'senior', 'senior software engineer', 'software engineer ii', 'software engineer iii'];
-  if (preferredLevels.some((term) => normalizedTitle.includes(term))) {
-    return normalizedTitle.includes('senior') ? 88 : 82;
+  const midPreferredLevels = ['mid', 'mid-level', 'intermediate', 'software engineer ii'];
+  if (midPreferredLevels.some((term) => normalizedTitle.includes(term))) {
+    return 90;
+  }
+
+  const seniorPreferredLevels = ['senior', 'senior software engineer', 'software engineer iii'];
+  if (seniorPreferredLevels.some((term) => normalizedTitle.includes(term))) {
+    return 82;
   }
 
   if (requirements.experience_level.some((level) => normalizedTitle.includes(level.replace('-level', '').trim()))) {
