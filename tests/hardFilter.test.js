@@ -195,4 +195,5 @@ test('applyHardFilters rejects explicit hard filter mismatches', () => {
   assert.equal(result.accepted.length, 0);
   assert.equal(result.rejected.length, 1);
   assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /location|redFlags/);
+  assert.match(result.rejected[0].reasons.find((item) => item.field === 'redFlags').message, /unpaid/);
 });

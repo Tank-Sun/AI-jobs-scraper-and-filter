@@ -12,6 +12,10 @@ function matchesAny(text, terms) {
   return terms.some((term) => text.includes(term));
 }
 
+function matchingTerms(text, terms) {
+  return terms.filter((term) => text.includes(term));
+}
+
 function getCompanySizeRange(bucket, normalization) {
   return normalization.companySizeBands?.[bucket] ?? null;
 }
@@ -110,8 +114,9 @@ export function applyHardFilters(jobs, requirements, normalization) {
       pushReason(reasons, 'visaPolicy', `Visa policy ${normalized.visaBucket} is not allowed`);
     }
 
-    if (includesAny(normalized.normalizedDescription, requirements.red_flags)) {
-      pushReason(reasons, 'redFlags', 'Description matched a red flag');
+    const matchedRedFlags = matchingTerms(normalized.normalizedDescription, requirements.red_flags);
+    if (matchedRedFlags.length > 0) {
+      pushReason(reasons, 'redFlags', `Matched red flags: ${matchedRedFlags.join(', ')}`);
     }
 
 
