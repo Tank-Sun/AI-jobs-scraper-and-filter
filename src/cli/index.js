@@ -15,7 +15,7 @@ import { resolveScoreInput } from './reportRuns.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..', '..');
-const DEFAULT_REPORT_LIMIT = 50;
+const DEFAULT_REPORT_LIMIT = 30;
 
 function parseArgs(argv) {
   const args = {};

@@ -69,6 +69,7 @@ function toCsvRows(shortlist) {
     'company',
     'title',
     'location',
+    'job_url',
     'skills',
     'responsibilities',
     'company_quality',
@@ -77,7 +78,6 @@ function toCsvRows(shortlist) {
     'seniority',
     'risk',
     'why_recommended',
-    'job_url',
   ];
 
   const rows = shortlist.map((job, index) => [
@@ -86,6 +86,7 @@ function toCsvRows(shortlist) {
     job.company,
     job.title,
     job.location,
+    job.jobUrl,
     job.breakdown.skills,
     job.breakdown.responsibilities,
     job.breakdown.company_quality,
@@ -94,7 +95,6 @@ function toCsvRows(shortlist) {
     job.breakdown.seniority,
     job.breakdown.risk,
     job.whyRecommended,
-    job.jobUrl,
   ]);
 
   return [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
