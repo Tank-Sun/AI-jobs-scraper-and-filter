@@ -126,6 +126,27 @@ test('applyHardFilters still rejects companies below the preferred size range', 
   assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /companySize/);
 });
 
+
+test('applyHardFilters lets AI-related roles bypass the undersized company hard filter', () => {
+  const aiRole = [
+    {
+      title: 'Senior Software Engineer, AI',
+      company: 'Toast',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'No sponsorship',
+      companySize: '11-50',
+      description: 'Build AI-powered product features with Typescript React and Node.js.',
+      jobUrl: 'https://example.com/toast-ai',
+    },
+  ];
+
+  const result = applyHardFilters(aiRole, requirements, normalization);
+  assert.equal(result.accepted.length, 1);
+  assert.equal(result.rejected.length, 0);
+  assert.match(result.accepted[0].aiSignals.join(','), /ai_company_size_override/);
+});
+
 test('applyHardFilters rejects titles that are clearly outside the target experience range', () => {
   const jobs = [
     {

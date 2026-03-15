@@ -94,7 +94,7 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
 
 const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, mergeAiAndHeuristicScores, normalizeGeminiResult, riskScore } = __testables;
 
-test('hasAiProductSignal boosts AI product and AI-powered feature roles', () => {
+test('hasAiProductSignal boosts AI application roles but not model-training or platform roles', () => {
   assert.equal(
     hasAiProductSignal({
       title: 'Senior Software Engineer',
@@ -102,6 +102,14 @@ test('hasAiProductSignal boosts AI product and AI-powered feature roles', () => 
       description: 'Build AI-powered features and copilots for customer workflows.',
     }),
     true
+  );
+  assert.equal(
+    hasAiProductSignal({
+      title: 'Senior ML Platform Engineer',
+      company: 'Acme',
+      description: 'Build model serving, ML platform infrastructure, and training pipelines for machine learning systems.',
+    }),
+    false
   );
   assert.equal(
     hasAiProductSignal({
@@ -264,6 +272,33 @@ test('heuristicScore ranks frontend AI product work above enterprise AI and ML p
   assert.ok(frontendAiProduct.totalScore > mlPlatform.totalScore);
   assert.ok(frontendAiProduct.breakdown.responsibilities > enterpriseAi.breakdown.responsibilities);
   assert.ok(frontendAiProduct.breakdown.growth > mlPlatform.breakdown.growth);
+});
+
+
+test('heuristicScore ranks AI product application work above model-training and AI infra roles', () => {
+  const aiApplicationRole = heuristicScore({
+    ...jobs[0],
+    title: 'Senior Full Stack Engineer, AI',
+    company: 'ProductAiCo',
+    description: 'Ship user-facing AI-powered product features end-to-end with TypeScript, React, Node.js, and strong product ownership.',
+    aiSignals: [],
+    mustHaveSkillMatches: ['typescript'],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  const aiInfraRole = heuristicScore({
+    ...jobs[0],
+    title: 'Senior Machine Learning Platform Engineer',
+    company: 'InfraAiCo',
+    description: 'Build ML platform infrastructure, model serving, distributed training systems, and backend services for machine learning teams.',
+    aiSignals: [],
+    mustHaveSkillMatches: [],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  assert.ok(aiApplicationRole.totalScore > aiInfraRole.totalScore);
+  assert.ok(aiApplicationRole.breakdown.company_quality > aiInfraRole.breakdown.company_quality);
+  assert.ok(aiApplicationRole.breakdown.growth > aiInfraRole.breakdown.growth);
 });
 
 test('heuristicScore ranks web roles above React Native, and React Native above native mobile', () => {

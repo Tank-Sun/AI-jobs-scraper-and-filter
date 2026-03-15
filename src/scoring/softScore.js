@@ -166,6 +166,39 @@ const AI_INFRA_TERMS = [
   'observability',
 ];
 
+const AI_APPLICATION_TERMS = [
+  'ai-powered',
+  'ai powered',
+  'copilot',
+  'assistant',
+  'agent',
+  'agents',
+  'ai feature',
+  'ai features',
+  'user-facing ai',
+  'customer-facing ai',
+  'generative ai',
+  'genai',
+  'llm',
+];
+
+const AI_MODELING_TERMS = [
+  'model training',
+  'train models',
+  'training infrastructure',
+  'distributed training',
+  'fine-tuning',
+  'fine tuning',
+  'research scientist',
+  'applied scientist',
+  'ml research',
+  'deep learning',
+  'model evaluation',
+  'evaluation pipeline',
+  'feature store',
+  'inference infrastructure',
+];
+
 const BACKEND_PLATFORM_TERMS = [
   'growth platform',
   'integrations services',
@@ -269,10 +302,47 @@ function seniorityScore(job, requirements) {
   return 68;
 }
 
+function hasGenericAiSignal(job) {
+  const text = jobText(job);
+  const aiTerms = ['ai product', 'artificial intelligence', 'generative ai', 'genai', 'llm', 'machine learning'];
+  return aiTerms.some((term) => text.includes(term)) || /\bai\b/.test(text);
+}
+
+function hasAiModelingOrInfraSignal(job) {
+  const text = jobText(job);
+  return ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 || ratioOfTerms(text, AI_MODELING_TERMS) > 0 || backendPlatformRatio(job) > 0.15;
+}
+
 function hasAiProductSignal(job) {
   const text = jobText(job);
-  const aiTerms = ['ai product', 'ai-powered', 'ai powered', 'artificial intelligence', 'generative ai', 'genai', 'llm', 'copilot', 'assistant', 'machine learning'];
-  return aiTerms.some((term) => text.includes(term));
+  if (!hasGenericAiSignal(job)) {
+    return false;
+  }
+
+  const explicitApplicationSignal = ratioOfTerms(text, AI_APPLICATION_TERMS) > 0;
+  const backendProductSignal = fittedBackendSignal(job) > 0.12 && (
+    text.includes('user-facing') ||
+    text.includes('customer-facing') ||
+    text.includes('product features') ||
+    text.includes('workflow') ||
+    text.includes('application')
+  );
+  const productContextSignal =
+    hasStrongProductSignal(job) ||
+    fullStackSignal(job) > 0.12 ||
+    frontendSignal(job) > 0.08 ||
+    hasDevexSignal(job) ||
+    backendProductSignal;
+
+  if (!explicitApplicationSignal && !productContextSignal) {
+    return false;
+  }
+
+  if (hasAiModelingOrInfraSignal(job) && !explicitApplicationSignal && !hasStrongProductSignal(job)) {
+    return false;
+  }
+
+  return true;
 }
 
 function hasDevexSignal(job) {
@@ -350,6 +420,7 @@ function riskScore(job) {
     missing_location_bucket: 2,
     missing_company_size_bucket: 0,
     company_size_outside_preferred_range: 10,
+    ai_company_size_override: 0,
     missing_employment_type_bucket: 0,
     missing_visa_bucket: 0,
     title_not_in_preferred_lists: 8,
@@ -363,7 +434,7 @@ function riskScore(job) {
   const negativePenalty = Math.min((job.negativeSkillMatches?.length ?? 0) * 12, 36);
   const consultingPenalty = ratioOfTerms(text, CONSULTING_TERMS) > 0 ? 22 : 0;
   const evergreenPenalty = ratioOfTerms(text, EVERGREEN_TERMS) > 0 ? 12 : 0;
-  const infraPenalty = ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 && !hasFrontendAiProductSignal(job) ? 18 : 0;
+  const infraPenalty = hasAiModelingOrInfraSignal(job) && !hasFrontendAiProductSignal(job) ? 18 : 0;
   const backendPlatformPenalty = backendPlatformRatio(job) > 0.15 && !hasFrontendAiProductSignal(job) ? 18 : 0;
   const pseudoFullStackPenalty = hasWrongFullStackSignal(job) ? 12 : 0;
   const nativeMobilePenalty = nativeMobileRatio(job) * 42;
@@ -389,7 +460,7 @@ function responsibilityAlignmentScore(job) {
   const positiveRatio = ratioOfTerms(text, PRODUCT_ENGINEERING_TERMS);
   const avoidRatio = ratioOfTerms(text, AVOID_DIRECTION_TERMS);
   const consultingPenalty = ratioOfTerms(text, CONSULTING_TERMS) > 0 ? 20 : 0;
-  const infraPenalty = ratioOfTerms(text, AI_INFRA_TERMS) > 0.18 && !hasFrontendAiProductSignal(job) ? 30 : 0;
+  const infraPenalty = hasAiModelingOrInfraSignal(job) && !hasFrontendAiProductSignal(job) ? 30 : 0;
   const backendPlatformPenalty = backendPlatformRatio(job) > 0.15 && !hasFrontendAiProductSignal(job) ? 24 : 0;
   const internalToolsPenalty = hasInternalToolsSignal(job) && !hasDevexSignal(job) ? 26 : 0;
   const nativeMobilePenalty = nativeMobileRatio(job) * 55;
@@ -446,7 +517,7 @@ function titleAlignmentScore(job, requirements) {
 function heuristicScore(job, requirements, resume) {
   const weights = requirements.weights;
   const growthBase = (job.description ?? '').toLowerCase().includes('growth') ? 80 : 45;
-  const growthPenalty = backendPlatformRatio(job) > 0.15 && !hasFrontendAiProductSignal(job) ? 18 : 0;
+  const growthPenalty = (hasAiModelingOrInfraSignal(job) || backendPlatformRatio(job) > 0.15) && !hasFrontendAiProductSignal(job) ? 18 : 0;
   const productGrowthBoost = hasStrongProductSignal(job) ? 10 : 0;
   const frontendAiGrowthBoost = hasFrontendAiProductSignal(job) ? 10 : 0;
   const breakdown = {
@@ -497,6 +568,7 @@ function buildGeminiPrompt(job, requirements, resume) {
     '- Many postings mention broad or secondary tech stacks. Do not reject merely because avoid-list technologies appear somewhere in the posting. Treat them as strong negatives only when the core responsibilities or must-have requirements are centered on them.',
     '- If company size is outside the preferred range but the role is otherwise strong, that should usually lower enthusiasm rather than force rejection.',
     '- Strong positive signal if the company is building AI products or the role clearly ships AI-powered features to users. Prefer these when the rest of the role is also a fit.',
+    '- Treat AI application/product work as much stronger than AI infra, ML platform, model training, research, or backend-only AI roles that are detached from user-facing product engineering.',
     '- Do not give the same boost to AI strategy, AI consulting, or backend/infra/platform work that is detached from product-facing engineering.',
     '- If title fit, core stack fit, and day-to-day work are all weak or ambiguous, reject rather than giving the benefit of the doubt.',
     '- Treat evergreen or generic future-opportunity postings more skeptically unless the role still looks unusually aligned.',

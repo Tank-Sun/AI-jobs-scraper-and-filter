@@ -16,7 +16,36 @@ function getCompanySizeRange(bucket, normalization) {
   return normalization.companySizeBands?.[bucket] ?? null;
 }
 
-function splitCompanySizeDecision(bucket, requirements, normalization) {
+function hasAiRelatedOverride(job) {
+  const text = [
+    job.title,
+    job.company,
+    job.description,
+    job.normalized?.normalizedTitle,
+    job.normalized?.normalizedDescription,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  const aiTerms = [
+    ' ai ',
+    'ai-powered',
+    'ai powered',
+    'artificial intelligence',
+    'generative ai',
+    'genai',
+    'llm',
+    'machine learning',
+    'copilot',
+    'assistant',
+  ];
+
+  return aiTerms.some((term) => text.includes(term.trim()) || text.includes(term));
+}
+
+function splitCompanySizeDecision(job, requirements, normalization) {
+  const bucket = job.normalized.companySizeBucket;
   if (!bucket) {
     return { accepted: true, signal: 'missing_company_size_bucket' };
   }
@@ -39,6 +68,10 @@ function splitCompanySizeDecision(bucket, requirements, normalization) {
     return { accepted: true, signal: 'company_size_outside_preferred_range' };
   }
 
+  if (hasAiRelatedOverride(job)) {
+    return { accepted: true, signal: 'ai_company_size_override' };
+  }
+
   return { accepted: false, signal: null };
 }
 
@@ -57,7 +90,7 @@ export function applyHardFilters(jobs, requirements, normalization) {
       pushReason(reasons, 'location', `Location bucket ${normalized.locationBucket} is not allowed`);
     }
 
-    const companySizeDecision = splitCompanySizeDecision(normalized.companySizeBucket, requirements, normalization);
+    const companySizeDecision = splitCompanySizeDecision({ ...job, normalized }, requirements, normalization);
     if (companySizeDecision.signal) {
       aiSignals.push(companySizeDecision.signal);
     }
