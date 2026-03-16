@@ -65,10 +65,18 @@ test('riskScore ignores missing employment and visa metadata by themselves', () 
 });
 
 
-test('heuristicScore soft-penalizes oversized companies instead of filtering them out', () => {
+test('heuristicScore prefers 51-1000 companies over 1001-5000, and 1001-5000 over 5000+', () => {
   const preferredSize = heuristicScore({
     ...jobs[0],
+    companySize: '201-500',
     aiSignals: [],
+  }, requirements, resume);
+
+  const large = heuristicScore({
+    ...jobs[0],
+    company: 'LargeCo AI',
+    companySize: '1001-5000',
+    aiSignals: ['company_size_outside_preferred_range'],
   }, requirements, resume);
 
   const oversized = heuristicScore({
@@ -78,9 +86,12 @@ test('heuristicScore soft-penalizes oversized companies instead of filtering the
     aiSignals: ['company_size_outside_preferred_range'],
   }, requirements, resume);
 
-  assert.ok(oversized.totalScore < preferredSize.totalScore);
-  assert.ok(oversized.breakdown.company_quality < preferredSize.breakdown.company_quality);
-  assert.ok(oversized.breakdown.risk < preferredSize.breakdown.risk);
+  assert.ok(preferredSize.totalScore > large.totalScore);
+  assert.ok(large.totalScore > oversized.totalScore);
+  assert.ok(preferredSize.breakdown.company_quality > large.breakdown.company_quality);
+  assert.ok(large.breakdown.company_quality > oversized.breakdown.company_quality);
+  assert.ok(preferredSize.breakdown.risk > large.breakdown.risk);
+  assert.ok(large.breakdown.risk > oversized.breakdown.risk);
 });
 
 test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncertainty rather than rejection', () => {
