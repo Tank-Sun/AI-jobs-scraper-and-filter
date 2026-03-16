@@ -6,7 +6,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SCORE_CONCURRENCY = 4;
-const SCORING_SIGNATURE_VERSION = '2026-03-14-title-skill-priority-v11';
+const SCORING_SIGNATURE_VERSION = '2026-03-16-direct-ai-input-v13';
 const AI_HEURISTIC_BLEND_RATIO = 0.4;
 
 const PRODUCT_ENGINEERING_TERMS = [
@@ -584,7 +584,7 @@ function heuristicScore(job, requirements, resume) {
 function buildGeminiPrompt(job, requirements, resume) {
   return [
     'You are evaluating whether a LinkedIn job should stay on a shortlist for Tank Sun.',
-    'Hard filters already removed deterministic mismatches. Your job is to make the final shortlist-or-reject decision using overall fit, not just keyword overlap.',
+    'You must make the full shortlist-or-reject decision using only the candidate profile, requirements, and the job information below.',
     '',
     'Candidate profile summary:',
     '- Best fit: product engineering, frontend-heavy full-stack roles, platform/product engineering, developer experience, and AI-enabled application work.',
@@ -608,7 +608,6 @@ function buildGeminiPrompt(job, requirements, resume) {
     '- If both title fit and core stack fit are clearly weak, reject even if the company or AI domain sounds attractive.',
     '- If title fit, core stack fit, and day-to-day work are all weak or ambiguous, reject rather than giving the benefit of the doubt.',
     '- Treat evergreen or generic future-opportunity postings more skeptically unless the role still looks unusually aligned.',
-    '- Use aiSignals as weak hints about uncertainty or possible concerns. Missing metadata and unconfirmed skills are not disqualifiers by themselves.',
     '',
     'Scoring guidance:',
     "- skills: how well the role matches the candidate's actual strengths and primary required stack, not every incidental technology mentioned in the posting. This is one of the highest-priority dimensions.",
@@ -642,7 +641,7 @@ function buildGeminiPrompt(job, requirements, resume) {
     'Resume skills sample:',
     JSON.stringify(resume.skills.slice(0, 120)),
     '',
-    'Job:',
+    'Job information:',
     JSON.stringify({
       title: job.title,
       company: job.company,
@@ -653,9 +652,6 @@ function buildGeminiPrompt(job, requirements, resume) {
       postedTime: job.postedTime,
       applicantInfo: job.applicantInfo,
       description: job.description,
-      aiSignals: job.aiSignals,
-      mustHaveSkillMatches: job.mustHaveSkillMatches,
-      negativeSkillMatches: job.negativeSkillMatches,
     }, null, 2),
     '',
     'Return JSON only.',
@@ -717,6 +713,7 @@ function buildScoreSignature(job, model) {
         aiSignals: job.aiSignals,
         mustHaveSkillMatches: job.mustHaveSkillMatches,
         negativeSkillMatches: job.negativeSkillMatches,
+      screeningNotes: job.screeningNotes,
       })
     )
     .digest('hex');
@@ -815,11 +812,19 @@ function hasCriticalTitleAndSkillMismatch(result) {
 }
 
 function toAiRejectionReasons(result) {
-  return [
-    { field: 'aiDecision', message: result.rejectReason || 'AI rejected this role because title and core skills fit were too weak.' },
-    { field: 'title', message: `Title fit score ${result.breakdown.title} is too low` },
-    { field: 'skills', message: `Skills fit score ${result.breakdown.skills} is too low` },
+  const reasons = [
+    { field: 'aiDecision', message: result.rejectReason || 'AI rejected this role as an overall mismatch.' },
   ];
+
+  const lowestBreakdowns = Object.entries(result.breakdown ?? {})
+    .sort((left, right) => left[1] - right[1])
+    .slice(0, 3);
+
+  for (const [field, value] of lowestBreakdowns) {
+    reasons.push({ field, message: `${field.replaceAll('_', ' ')} score ${value} is weak` });
+  }
+
+  return reasons;
 }
 
 function buildCacheEntry({ key, signature, mode, status, result, reasons, message, originalMessage }) {
@@ -905,10 +910,10 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
   try {
     const heuristic = heuristicScore(job, requirements, resume);
     const result = apiKey
-      ? mergeAiAndHeuristicScores(await callGemini({ apiKey, model, job, requirements, resume }), heuristic, requirements.weights)
+      ? await callGemini({ apiKey, model, job, requirements, resume })
       : heuristic;
 
-    if (apiKey && result.decision !== 'shortlist' && hasCriticalTitleAndSkillMismatch(result)) {
+    if (result.decision !== 'shortlist') {
       const reasons = toAiRejectionReasons(result);
       const rejectedResult = {
         ...result,
@@ -961,7 +966,7 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
       const scoredFallback = {
         ...fallback,
         modelDecision: fallback.decision,
-        decision: 'scored',
+        decision: fallback.decision === 'shortlist' ? 'scored' : 'reject',
       };
       const enrichedScored = {
         ...enriched,
@@ -975,10 +980,18 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
         status: 'scored',
         result: scoredFallback,
       });
-      return {
-        type: 'scored',
-        value: enrichedScored,
-      };
+      return scoredFallback.decision === 'reject'
+        ? {
+            type: 'rejected',
+            value: {
+              ...enrichedScored,
+              reasons: toAiRejectionReasons(fallback),
+            },
+          }
+        : {
+            type: 'scored',
+            value: enrichedScored,
+          };
     } catch (fallbackError) {
       const failure = {
         ...job,

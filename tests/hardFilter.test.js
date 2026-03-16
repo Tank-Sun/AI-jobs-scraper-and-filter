@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { applyHardFilters } from '../src/filter/hardFilter.js';
+import { applyHardFilters, prepareJobsForAiScreening } from '../src/filter/hardFilter.js';
 
 const normalization = {
   locationBuckets: {
@@ -278,4 +278,31 @@ test('applyHardFilters rejects explicit hard filter mismatches', () => {
   assert.equal(result.rejected.length, 1);
   assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /location|redFlags/);
   assert.match(result.rejected[0].reasons.find((item) => item.field === 'redFlags').message, /unpaid/);
+});
+
+
+test('prepareJobsForAiScreening keeps jobs for AI review and records soft screening notes', () => {
+  const jobs = [
+    {
+      title: 'Junior Software Engineer',
+      company: 'TinyCo',
+      location: 'Austin, TX',
+      employmentType: 'Contract',
+      visaPolicy: 'Requires sponsorship',
+      companySize: '11-50',
+      description: 'Internship-friendly Java role requiring 7+ years of experience',
+      jobUrl: 'https://example.com/ai-only-prep',
+    },
+  ];
+
+  const prepared = prepareJobsForAiScreening(jobs, requirements, normalization);
+  assert.equal(prepared.length, 1);
+  assert.match(prepared[0].aiSignals.join(','), /missing_location_bucket/);
+  assert.match(prepared[0].aiSignals.join(','), /company_size_below_preferred_range/);
+  assert.match(prepared[0].aiSignals.join(','), /missing_employment_type_bucket/);
+  assert.match(prepared[0].aiSignals.join(','), /missing_visa_bucket/);
+  assert.match(prepared[0].aiSignals.join(','), /experience_above_target_range/);
+  assert.match(prepared[0].aiSignals.join(','), /entry_level_title_present/);
+  assert.match(prepared[0].aiSignals.join(','), /negative_skill_overlap/);
+  assert.ok(prepared[0].screeningNotes.length > 0);
 });

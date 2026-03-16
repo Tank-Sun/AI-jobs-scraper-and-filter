@@ -8,7 +8,6 @@ import { parseRequirementsFile } from '../parser/requirements.js';
 import { parseResumeFile } from '../parser/resume.js';
 import { collectJobs } from '../scraper/linkedin.js';
 import { dedupeJobs } from '../filter/dedupe.js';
-import { applyHardFilters } from '../filter/hardFilter.js';
 import { scoreJobs } from '../scoring/softScore.js';
 import { ensureRunDirectory, readJsonFile, writeRawJobsSnapshot, writeReports } from '../output/reports.js';
 import { resolveScoreInput } from './reportRuns.js';
@@ -119,9 +118,8 @@ async function runScorePhase({ args, requirements, resume, normalization, env })
   const generatedAt = new Date().toISOString();
   const jobs = await readJsonFile(rawJobsPath);
   const dedupeResult = dedupeJobs(jobs, normalization);
-  const filteringResult = applyHardFilters(dedupeResult.uniqueJobs, requirements, normalization);
   const scoringResult = await scoreJobs({
-    jobs: filteringResult.accepted,
+    jobs: dedupeResult.uniqueJobs,
     requirements,
     resume,
     env,
@@ -132,15 +130,15 @@ async function runScorePhase({ args, requirements, resume, normalization, env })
   const shortlist = [...scoringResult.scored]
     .sort((left, right) => right.totalScore - left.totalScore)
     .slice(0, shortlistLimit);
-  const allRejected = [...filteringResult.rejected, ...scoringResult.aiRejected];
+  const allRejected = [...scoringResult.aiRejected];
 
   const summary = {
     mode: 'score',
     jobsSeen: jobs.length,
     jobsAfterDedupe: dedupeResult.uniqueJobs.length,
     duplicatesRemoved: dedupeResult.duplicatesRemoved,
-    deterministicRejected: filteringResult.rejected.length,
-    sentToScoring: filteringResult.accepted.length,
+    deterministicRejected: 0,
+    sentToScoring: dedupeResult.uniqueJobs.length,
     aiRejected: scoringResult.aiRejected.length,
     shortlisted: shortlist.length,
     scoringFailures: scoringResult.failures.length,

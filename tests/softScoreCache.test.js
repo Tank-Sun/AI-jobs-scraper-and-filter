@@ -100,8 +100,9 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   assert.match(prompt, /Missing employment type or visa policy should not by itself cause rejection or lower fit\./);
   assert.match(prompt, /Missing explicit mention of TypeScript, React, or Node\.js should be treated as uncertainty, not as an automatic rejection/);
   assert.match(prompt, /Do not reject merely because avoid-list technologies appear somewhere in the posting\./);
-  assert.match(prompt, /Missing metadata and unconfirmed skills are not disqualifiers by themselves\./);
-  assert.match(prompt, /If both title fit and core stack fit are clearly weak, reject even if the company or AI domain sounds attractive\./);
+  assert.match(prompt, /You must make the full shortlist-or-reject decision using only the candidate profile, requirements, and the job information below\./);
+  assert.ok(!prompt.includes('aiSignals'));
+  assert.ok(!prompt.includes('screeningNotes'));
 });
 
 const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, hasAiProductSignal, hasCriticalTitleAndSkillMismatch, hasDevexSignal, hasStrongProductSignal, heuristicScore, mergeAiAndHeuristicScores, normalizeGeminiResult, riskScore } = __testables;
@@ -139,7 +140,7 @@ test('buildScoreSignature changes when job content changes', () => {
   assert.notEqual(first, second);
 });
 
-test('scoreJobs keeps low-scoring accepted jobs in scored results instead of aiRejected', async () => {
+test('scoreJobs sends AI-rejected low-fit jobs to aiRejected in AI-only screening mode', async () => {
   const lowFitJob = {
     ...jobs[0],
     title: 'Senior Java Backend Developer',
@@ -159,10 +160,10 @@ test('scoreJobs keeps low-scoring accepted jobs in scored results instead of aiR
     cachePath: '',
   });
 
-  assert.equal(result.aiRejected.length, 0);
-  assert.equal(result.scored.length, 1);
-  assert.equal(result.scored[0].modelDecision, 'reject');
-  assert.ok(result.scored[0].totalScore < 60);
+  assert.equal(result.aiRejected.length, 1);
+  assert.equal(result.scored.length, 0);
+  assert.equal(result.aiRejected[0].modelDecision, 'reject');
+  assert.ok(result.aiRejected[0].totalScore < 60);
 });
 
 
