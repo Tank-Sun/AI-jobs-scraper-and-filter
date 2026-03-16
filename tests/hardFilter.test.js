@@ -147,7 +147,7 @@ test('applyHardFilters lets AI-related roles bypass the undersized company hard 
   assert.match(result.accepted[0].aiSignals.join(','), /ai_company_size_override/);
 });
 
-test('applyHardFilters rejects titles that are clearly outside the target experience range', () => {
+test('applyHardFilters rejects staff titles and only keeps junior roles when explicit experience stays within 1-3 years', () => {
   const jobs = [
     {
       title: 'Staff Software Engineer',
@@ -166,18 +166,27 @@ test('applyHardFilters rejects titles that are clearly outside the target experi
       employmentType: 'Full-Time',
       visaPolicy: 'TN eligible',
       companySize: '51-200',
+      description: 'Typescript React Node.js role. Requires 1-3 years of experience building product features.',
+      jobUrl: 'https://example.com/junior-allowed',
+    },
+    {
+      title: 'Junior Software Engineer',
+      company: 'Acme',
+      location: 'Remote',
+      employmentType: 'Full-Time',
+      visaPolicy: 'TN eligible',
+      companySize: '51-200',
       description: 'Typescript React Node.js role',
-      jobUrl: 'https://example.com/junior',
+      jobUrl: 'https://example.com/junior-rejected',
     },
   ];
 
   const result = applyHardFilters(jobs, requirements, normalization);
-  assert.equal(result.accepted.length, 0);
+  assert.equal(result.accepted.length, 1);
+  assert.equal(result.accepted[0].jobUrl, 'https://example.com/junior-allowed');
   assert.equal(result.rejected.length, 2);
   assert.match(result.rejected.map((job) => job.reasons.map((item) => item.field).join(',')).join(','), /seniority/);
 });
-
-
 test('applyHardFilters rejects data science and ML modeling titles outside the target scope', () => {
   const jobs = [
     {
