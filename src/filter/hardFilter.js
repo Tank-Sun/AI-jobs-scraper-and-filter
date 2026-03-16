@@ -1,5 +1,13 @@
 import { normalizeJob } from './normalize.js';
 
+/*
+ * Legacy deterministic filtering helpers.
+ *
+ * The active scoring pipeline is AI-first / AI-only for business screening and does
+ * not call applyHardFilters() during normal score runs. We keep this module as a
+ * backup/reference path for experiments, regression checks, or a future fallback mode.
+ */
+
 function includesAny(text, targets) {
   return targets.some((target) => text.includes(target));
 }
@@ -112,6 +120,7 @@ function splitCompanySizeDecision(job, requirements, normalization) {
   return { accepted: false, signal: null };
 }
 
+// Legacy backup mode: not used by the default score pipeline.
 export function applyHardFilters(jobs, requirements, normalization) {
   const accepted = [];
   const rejected = [];

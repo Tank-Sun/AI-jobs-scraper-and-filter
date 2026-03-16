@@ -118,6 +118,8 @@ async function runScorePhase({ args, requirements, resume, normalization, env })
   const generatedAt = new Date().toISOString();
   const jobs = await readJsonFile(rawJobsPath);
   const dedupeResult = dedupeJobs(jobs, normalization);
+  // Default runtime path: AI-first screening. Deterministic filtering remains in
+  // src/filter/hardFilter.js only as a legacy/backup mode and is not applied here.
   const scoringResult = await scoreJobs({
     jobs: dedupeResult.uniqueJobs,
     requirements,

@@ -194,3 +194,8 @@ node src/cli/index.js --mode=score --runDir=reports/YOUR_RUN_DIR
 - `AI product / AI-powered features / user-facing application work` 强正向
 - `consulting / bodyshop / low-level systems / data science / ML modeling / native mobile / Java/.NET-heavy core stacks` 通常偏弱或会被 reject
 
+说明：
+- 仓库里仍然保留 `applyHardFilters()` 这套 deterministic 逻辑。
+- 但它现在被视为 legacy / 备用模式，不是默认运行路径的一部分。
+- 当前默认行为是 AI-first：`score` 阶段不会先调用 deterministic business filtering。
+
