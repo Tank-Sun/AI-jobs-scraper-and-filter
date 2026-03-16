@@ -7,7 +7,6 @@ import { GoogleGenAI, Type } from '@google/genai';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SCORE_CONCURRENCY = 4;
 const SCORING_SIGNATURE_VERSION = '2026-03-16-ai-prompt-recalibrated-v16';
-const AI_HEURISTIC_BLEND_RATIO = 0.4;
 
 const PRODUCT_ENGINEERING_TERMS = [
   'product',
@@ -765,29 +764,6 @@ function normalizeGeminiScoreValue(value) {
   return clampScore(normalized);
 }
 
-function blendBreakdowns(aiBreakdown, heuristicBreakdown) {
-  return {
-    skills: clampScore(aiBreakdown.skills * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.skills * (1 - AI_HEURISTIC_BLEND_RATIO)),
-    responsibilities: clampScore(aiBreakdown.responsibilities * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.responsibilities * (1 - AI_HEURISTIC_BLEND_RATIO)),
-    company_quality: clampScore(aiBreakdown.company_quality * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.company_quality * (1 - AI_HEURISTIC_BLEND_RATIO)),
-    title: clampScore(aiBreakdown.title * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.title * (1 - AI_HEURISTIC_BLEND_RATIO)),
-    seniority: clampScore(aiBreakdown.seniority * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.seniority * (1 - AI_HEURISTIC_BLEND_RATIO)),
-    growth: clampScore(aiBreakdown.growth * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.growth * (1 - AI_HEURISTIC_BLEND_RATIO)),
-    risk: clampScore(aiBreakdown.risk * AI_HEURISTIC_BLEND_RATIO + heuristicBreakdown.risk * (1 - AI_HEURISTIC_BLEND_RATIO)),
-  };
-}
-
-function mergeAiAndHeuristicScores(aiResult, heuristicResult, weights) {
-  const breakdown = blendBreakdowns(aiResult.breakdown, heuristicResult.breakdown);
-  return {
-    ...aiResult,
-    totalScore: calculateWeightedTotalScore(breakdown, weights),
-    breakdown,
-    heuristicTotalScore: heuristicResult.totalScore,
-    aiTotalScore: aiResult.totalScore,
-    scoringSource: 'gemini+heuristic',
-  };
-}
 
 function normalizeGeminiResult(parsed, weights) {
   const breakdown = {
@@ -812,9 +788,6 @@ function normalizeGeminiResult(parsed, weights) {
 }
 
 
-function hasCriticalTitleAndSkillMismatch(result) {
-  return (result.breakdown?.title ?? 100) <= 20 && (result.breakdown?.skills ?? 100) <= 35;
-}
 
 function toAiRejectionReasons(result) {
   const reasons = [
@@ -978,19 +951,24 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
         ...scoredFallback,
       };
 
+      const fallbackReasons = scoredFallback.decision === 'reject'
+        ? toAiRejectionReasons(fallback)
+        : [];
+
       cache.entries[cacheKey] = buildCacheEntry({
         key: cacheKey,
         signature,
         mode: scoringMode,
-        status: 'scored',
+        status: scoredFallback.decision === 'reject' ? 'rejected' : 'scored',
         result: scoredFallback,
+        reasons: fallbackReasons,
       });
       return scoredFallback.decision === 'reject'
         ? {
             type: 'rejected',
             value: {
               ...enrichedScored,
-              reasons: toAiRejectionReasons(fallback),
+              reasons: fallbackReasons,
             },
           }
         : {
@@ -1089,11 +1067,9 @@ export const __testables = {
   buildScoreSignature,
   calculateWeightedTotalScore,
   hasAiProductSignal,
-  hasCriticalTitleAndSkillMismatch,
   hasDevexSignal,
   hasStrongProductSignal,
   heuristicScore,
-  mergeAiAndHeuristicScores,
   mapWithConcurrency,
   normalizeGeminiResult,
   normalizeGeminiScoreValue,

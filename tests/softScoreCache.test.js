@@ -111,7 +111,7 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   assert.ok(!prompt.includes('screeningNotes'));
 });
 
-const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, hasAiProductSignal, hasCriticalTitleAndSkillMismatch, hasDevexSignal, hasStrongProductSignal, heuristicScore, mergeAiAndHeuristicScores, normalizeGeminiResult, riskScore } = __testables;
+const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, normalizeGeminiResult, riskScore } = __testables;
 
 test('hasAiProductSignal boosts AI application roles but not model-training or platform roles', () => {
   assert.equal(
@@ -173,27 +173,6 @@ test('scoreJobs sends AI-rejected low-fit jobs to aiRejected in AI-only screenin
 });
 
 
-test('hasCriticalTitleAndSkillMismatch flags only clear title and skills mismatches', () => {
-  assert.equal(
-    hasCriticalTitleAndSkillMismatch({
-      breakdown: {
-        skills: 28,
-        title: 12,
-      },
-    }),
-    true
-  );
-
-  assert.equal(
-    hasCriticalTitleAndSkillMismatch({
-      breakdown: {
-        skills: 52,
-        title: 12,
-      },
-    }),
-    false
-  );
-});
 
 test('heuristicScore prefers full stack over fitted backend over frontend-only roles', () => {
   const fullStack = heuristicScore({
@@ -481,58 +460,6 @@ test('heuristicScore ranks strong AI product full-stack roles above consulting .
   assert.ok(strongFit.breakdown.risk > weakFit.breakdown.risk);
 });
 
-test('mergeAiAndHeuristicScores tempers overly optimistic AI scores with heuristic guardrails', () => {
-  const merged = mergeAiAndHeuristicScores(
-    {
-      decision: 'shortlist',
-      totalScore: 96,
-      breakdown: {
-        skills: 100,
-        responsibilities: 100,
-        company_quality: 90,
-        title: 80,
-        seniority: 100,
-        growth: 90,
-        risk: 100,
-      },
-      whyRecommended: 'AI likes it.',
-      rejectReason: '',
-      gaps: [],
-      scoringSource: 'gemini',
-    },
-    {
-      decision: 'reject',
-      totalScore: 32,
-      breakdown: {
-        skills: 10,
-        responsibilities: 20,
-        company_quality: 40,
-        title: 30,
-        seniority: 80,
-        growth: 30,
-        risk: 20,
-      },
-      whyRecommended: '',
-      rejectReason: 'Low fit.',
-      gaps: [],
-      scoringSource: 'heuristic',
-    },
-    requirements.weights
-  );
-
-  assert.equal(merged.totalScore, 52);
-  assert.deepEqual(merged.breakdown, {
-    skills: 46,
-    responsibilities: 52,
-    company_quality: 60,
-    title: 50,
-    seniority: 88,
-    growth: 54,
-    risk: 52,
-  });
-  assert.equal(merged.aiTotalScore, 96);
-  assert.equal(merged.heuristicTotalScore, 32);
-});
 
 test('normalizeGeminiResult scales 1-10 Gemini scores up to 0-100 and recomputes total from weights', () => {
   const normalized = normalizeGeminiResult({
