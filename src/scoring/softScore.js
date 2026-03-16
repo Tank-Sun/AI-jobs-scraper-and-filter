@@ -6,7 +6,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SCORE_CONCURRENCY = 4;
-const SCORING_SIGNATURE_VERSION = '2026-03-16-direct-ai-input-v13';
+const SCORING_SIGNATURE_VERSION = '2026-03-16-ai-prompt-recalibrated-v16';
 const AI_HEURISTIC_BLEND_RATIO = 0.4;
 
 const PRODUCT_ENGINEERING_TERMS = [
@@ -587,27 +587,32 @@ function buildGeminiPrompt(job, requirements, resume) {
     'You must make the full shortlist-or-reject decision using only the candidate profile, requirements, and the job information below.',
     '',
     'Candidate profile summary:',
-    '- Best fit: product engineering, frontend-heavy full-stack roles, platform/product engineering, developer experience, and AI-enabled application work.',
-    '- Strongest stack: TypeScript, JavaScript, React, Node.js.',
-    '- Good signs: user-facing product ownership, modern web engineering, AI features tied to real product value, cross-functional execution, and strong engineering quality.',
-    '- Extra-strong positive: companies building AI products or roles shipping AI-powered features to users, especially when the work is still product/full-stack/frontend oriented.',
+    '- Best fit: product engineering, full-stack roles first, then backend roles with a fitting stack, then frontend roles. Also strongly prefer developer experience, platform/product engineering, and AI-enabled application work.' ,
+    '- Strongest stack: TypeScript, JavaScript, React, Node.js. Backend roles are also a strong fit when the work is product-oriented or AI-application oriented, even if the posting does not explicitly center on Node.js/TypeScript.' ,
+    '- Good signs: user-facing product ownership, modern web engineering, AI features tied to real product value, cross-functional execution, strong engineering quality, and roles that match roughly 1-3 years of experience.' ,
+    '- Extra-strong positive: companies building AI products or roles shipping AI-powered features to users, especially when the work is still product/full-stack or fitting backend/frontend oriented.' ,
     '- Bad signs: titles or work that are mainly product owner, project/program manager, QA, IT admin, support, consulting bodyshop work, low-level systems, embedded, native mobile, or backend stacks centered on Java/Spring or .NET unless the rest of the role is still clearly aligned.',
     '',
     'Decision policy:',
-    '- Be selective. A role should only be shortlisted if there is positive evidence that it is a genuinely strong fit, not merely acceptable.',
-    '- Prefer actual day-to-day work over a flattering title. If the title sounds good but the responsibilities are off-target, reject it.',
+    '- Reject only when there is clear evidence that the role is a poor fit. If a role looks plausibly worth a manual review, prefer keeping it and letting score/ranking decide.' ,
+    '- Prefer actual day-to-day work over a flattering title. If the title sounds good but the responsibilities are clearly off-target, reject it. Otherwise keep borderline roles for ranking.' ,
     '- Prefer evidence from the job description and metadata. Do not invent missing facts.',
     '- Missing company size is fine. Company size is a filtering preference, not a score bonus. Jobs within the allowed size range should not get extra credit for simply being larger.',
     '- Missing employment type or visa policy should not by itself cause rejection or lower fit. Only explicit incompatible values should count against the role.',
-    '- Missing explicit mention of TypeScript, React, or Node.js should be treated as uncertainty, not as an automatic rejection, if the title and responsibilities still point to strong product/full-stack/frontend work.',
+    '- Missing explicit mention of TypeScript, React, or Node.js should be treated as uncertainty, not as an automatic rejection, if the title and responsibilities still point to strong product/full-stack/backend/frontend work.' ,
+    '- For backend roles, do not require an exact TypeScript/Node.js keyword match before keeping the role. If the work still looks product-facing, AI-application-facing, or plausibly adjacent to the candidate\'s stack, prefer keeping it with a lower skills score instead of rejecting it outright.' ,
     '- Many postings mention broad or secondary tech stacks. Do not reject merely because avoid-list technologies appear somewhere in the posting. Treat them as strong negatives only when the core responsibilities or must-have requirements are centered on them.',
     '- If company size is outside the preferred range but the role is otherwise strong, that should usually lower enthusiasm rather than force rejection.',
     '- Strong positive signal if the company is building AI products or the role clearly ships AI-powered features to users. Prefer these when the rest of the role is also a fit.',
     '- Treat AI application/product work as much stronger than AI infra, ML platform, model training, research, or backend-only AI roles that are detached from user-facing product engineering.',
     '- Do not give the same boost to AI strategy, AI consulting, or backend/infra/platform work that is detached from product-facing engineering.',
-    '- If both title fit and core stack fit are clearly weak, reject even if the company or AI domain sounds attractive.',
-    '- If title fit, core stack fit, and day-to-day work are all weak or ambiguous, reject rather than giving the benefit of the doubt.',
+    '- If both title fit and core stack fit are clearly weak, reject even if the company or AI domain sounds attractive. But do not reject just because a role is backend or because it is not frontend-heavy. Do treat clearly over-level titles such as Staff or Member of Technical Staff as strong negatives.' ,
+    '- Product/backend roles that look plausibly aligned should usually stay in the pool for ranking, even when the exact stack match is incomplete. Reserve rejection for backend roles that are clearly centered on avoid-list technologies or clearly infra/platform-only work detached from product engineering.' ,
+    '- If title fit, core stack fit, and day-to-day work are all clearly weak, reject. If they are mixed or partially uncertain, prefer keeping the role and lowering the score rather than rejecting it outright.' ,
     '- Treat evergreen or generic future-opportunity postings more skeptically unless the role still looks unusually aligned.',
+    '- Treat 1-3 years of experience, Engineer I/II, and Junior/Intermediate labels as positive or at least valid signals for fit. These should not be treated as automatic negatives.',
+    '- Mid-level fit is strongest, but 1-3 years roles can still be excellent matches and should often be favored over generic senior roles that are less aligned.',
+    '- Treat explicit New Grad, Intern, internship-only, Staff, Principal, Distinguished, Director, Manager, and Member of Technical Staff labels as strong negative signals unless the rest of the posting clearly contradicts the label.',
     '',
     'Scoring guidance:',
     "- skills: how well the role matches the candidate's actual strengths and primary required stack, not every incidental technology mentioned in the posting. This is one of the highest-priority dimensions.",

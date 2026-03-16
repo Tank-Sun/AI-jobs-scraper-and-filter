@@ -101,6 +101,12 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   assert.match(prompt, /Missing explicit mention of TypeScript, React, or Node\.js should be treated as uncertainty, not as an automatic rejection/);
   assert.match(prompt, /Do not reject merely because avoid-list technologies appear somewhere in the posting\./);
   assert.match(prompt, /You must make the full shortlist-or-reject decision using only the candidate profile, requirements, and the job information below\./);
+  assert.match(prompt, /full-stack roles first, then backend roles with a fitting stack, then frontend roles/i);
+  assert.match(prompt, /Treat 1-3 years of experience, Engineer I\/II, and Junior\/Intermediate labels as positive or at least valid signals for fit\./);
+  assert.match(prompt, /Treat explicit New Grad, Intern, internship-only, Staff, Principal, Distinguished, Director, Manager, and Member of Technical Staff labels as strong negative signals/i);
+  assert.match(prompt, /do not reject just because a role is backend or because it is not frontend-heavy/i);
+  assert.match(prompt, /For backend roles, do not require an exact TypeScript\/Node\.js keyword match before keeping the role\./);
+  assert.match(prompt, /Product\/backend roles that look plausibly aligned should usually stay in the pool for ranking/i);
   assert.ok(!prompt.includes('aiSignals'));
   assert.ok(!prompt.includes('screeningNotes'));
 });
