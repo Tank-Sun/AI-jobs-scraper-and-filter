@@ -13,6 +13,7 @@
 ## Validation
 - Run tests from WSL.
 - After edits, verify the changed files or behavior from WSL before reporting completion.
+- When code search tooling like `rg` fails in the current environment, fall back to simpler WSL-native reads such as `grep`, `sed`, or direct file slices instead of retrying fragile search commands.
 
 ## Documentation
 - Treat README and other Chinese text files as encoding-sensitive.
