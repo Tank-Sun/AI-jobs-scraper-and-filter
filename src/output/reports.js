@@ -86,7 +86,7 @@ function toCsvRows(shortlist) {
     job.company,
     job.title,
     job.location,
-    job.jobUrl,
+    `${job.jobUrl ?? ''} `,
     job.breakdown.skills,
     job.breakdown.responsibilities,
     job.breakdown.company_quality,
