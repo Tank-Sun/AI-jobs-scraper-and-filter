@@ -1,4 +1,4 @@
-import { access, readFile, writeFile } from 'node:fs/promises';
+﻿import { access, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { chromium } from 'playwright';
@@ -199,10 +199,6 @@ async function inspectJobCards(locator) {
       return [{ index, text, hasText, jobId: null }];
     });
   }).catch(() => []);
-}
-
-function pickNextFallbackSignal(cardSignals, attemptedTexts) {
-  return cardSignals.find((signal) => signal.hasText && !signal.jobId && !attemptedTexts.has(signal.text));
 }
 
 function scoreJobsPageCandidate({ url, cardCount }) {
@@ -485,18 +481,16 @@ async function collectJobLinks(page, limit, options = {}) {
   const { stallState = null, lastPage = false } = options;
   const startedAt = Date.now();
   const { locator: cards } = await getJobCardsState(page);
-  const cardSignals = await inspectJobCards(cards);
-  if (lastPage) {
-    const directCount = cardSignals.filter((signal) => Boolean(signal.jobId)).length;
-    const fallbackCount = cardSignals.filter((signal) => signal.hasText && !signal.jobId).length;
-    console.log(`[scrape] Last page collect: ${cardSignals.length} visible signals, ${directCount} direct ids, ${fallbackCount} fallback candidates`);
-  }
   const links = [];
   const seen = new Set();
+  const attemptedTexts = new Set();
 
   const selectedJobId = getCurrentJobIdFromUrl(page.url());
   if (selectedJobId) {
-    seen.add(selectedJobId);
+    seen.add(selectedJobId)
+  }
+
+  if (selectedJobId) {
     links.push(buildLinkedInJobUrl(selectedJobId));
     if (stallState) {
       stallState.lastAddedAt = Date.now();
@@ -506,69 +500,30 @@ async function collectJobLinks(page, limit, options = {}) {
     }
   }
 
-  for (const signal of cardSignals) {
-    if (!signal.jobId || seen.has(signal.jobId)) {
-      continue;
-    }
-
-    seen.add(signal.jobId);
-    links.push(buildLinkedInJobUrl(signal.jobId));
-    if (stallState) {
-      stallState.lastAddedAt = Date.now();
-    }
-    if (links.length >= limit) {
-      if (lastPage) {
-        console.log(`[scrape] Last page collect finished in ${Date.now() - startedAt}ms (direct hits filled the page)`);
-      }
-      return links;
-    }
-  }
-
-  const attemptedFallbackTexts = new Set();
-
-  while (true) {
-    if (stallState && hasLinkCollectionStalled({
-      lastLinkAddedAt: stallState.lastAddedAt,
-      collectedCount: stallState.collectedCount,
-    })) {
-      break;
-    }
-
+  while (links.length < limit) {
     const freshSignals = await inspectJobCards(cards);
-    const signal = pickNextFallbackSignal(freshSignals, attemptedFallbackTexts);
+    if (lastPage) {
+      const directCount = freshSignals.filter((signal) => Boolean(signal.jobId)).length;
+      const clickableCount = freshSignals.filter((signal) => signal.hasText).length;
+      console.log(`[scrape] Last page collect: ${clickableCount} visible signals, ${directCount} direct ids`);
+    }
+
+    const signal = freshSignals.find((candidate) => candidate.hasText && !attemptedTexts.has(candidate.text));
     if (!signal) {
       break;
     }
 
-    attemptedFallbackTexts.add(signal.text);
+    attemptedTexts.add(signal.text);
 
-    const card = cards.nth(signal.index);
-    await card.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
-
-    let jobId = await extractJobIdFromCard(card);
+    let jobId = signal.jobId;
     if (!jobId) {
-      const previousJobId = getCurrentJobIdFromUrl(page.url());
+      const card = cards.nth(signal.index);
+      await card.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
       await card.click({ timeout: 1500 }).catch(() => {});
-
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        await page.waitForTimeout(200);
-        jobId = await extractJobIdFromDetailPane(page);
-        if (jobId) {
-          break;
-        }
-
+      await page.waitForTimeout(250);
+      jobId = await extractJobIdFromDetailPane(page);
+      if (!jobId) {
         jobId = getCurrentJobIdFromUrl(page.url());
-        if (jobId && jobId !== previousJobId) {
-          break;
-        }
-      }
-
-      if (!jobId) {
-        jobId = await extractJobIdFromDetailPane(page);
-      }
-
-      if (!jobId) {
-        jobId = await extractJobIdFromCard(card);
       }
     }
 
@@ -580,9 +535,6 @@ async function collectJobLinks(page, limit, options = {}) {
     links.push(buildLinkedInJobUrl(jobId));
     if (stallState) {
       stallState.lastAddedAt = Date.now();
-    }
-    if (links.length >= limit) {
-      break;
     }
   }
 
@@ -651,12 +603,8 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
 
     if (!lastPage) {
       const { count: cardCount } = await getJobCardsState(page);
-      if (cardCount > 0 && addedThisPage >= Math.max(cardCount - 1, 1)) {
-        console.log(`[scrape] Collected most visible jobs on this page (${addedThisPage}/${cardCount}); skipping second-pass fallback and moving on`);
-      } else if (links.length < limit) {
-        await autoScrollJobsList(page);
-        const scrolledLinks = await collectJobLinks(page, limit - links.length, { stallState, lastPage: false });
-        addedThisPage += await mergeCollectedLinks(scrolledLinks);
+      if (cardCount > 0) {
+        console.log(`[scrape] Collected ${addedThisPage}/${cardCount} visible jobs on this page; moving on`);
       }
     }
 
@@ -729,24 +677,24 @@ function inferVisaPolicy(description) {
 
 function sanitizeDescription(text) {
   return normalizeWhitespace(text)
-    .replace(/鈥檚/g, "'s")
-    .replace(/鈥檒/gi, "'l")
-    .replace(/鈥檙e/g, "'re")
-    .replace(/鈥檓/g, "'m")
-    .replace(/鈥檇/g, "'d")
-    .replace(/鈥\?/g, '')
+    .replace(/閳ユ獨/g, "'s")
+    .replace(/閳ユ獟/gi, "'l")
+    .replace(/閳ユ獧e/g, "'re")
+    .replace(/閳ユ獡/g, "'m")
+    .replace(/閳ユ獓/g, "'d")
+    .replace(/閳?/g, '')
     .replace(/\s*Show less$/i, '')
     .replace(/\?more$/i, '')
     .replace(/\.\.\. more$/i, '')
-    .replace(/… more$/i, '')
-    .replace(/(?:\?|鈥\?)?more$/i, '')
+    .replace(/鈥?more$/i, '')
+    .replace(/(?:\?|閳?)?more$/i, '')
     .replace(/\s*more$/i, '')
     .trim();
 }
 
 function normalizeLinkedInMainText(text) {
   return normalizeWhitespace(text)
-    .replace(/\s+[·•路]\s+/g, ' | ')
+    .replace(/\s+[路鈥㈣矾]\s+/g, ' | ')
     .replace(/Promoted by hirer/gi, '')
     .replace(/Responses managed off LinkedIn/gi, '')
     .replace(/Easy Apply/gi, '')
@@ -1061,13 +1009,14 @@ export const __testables = {
   isNoResultsPage,
   parseTotalResultsCount,
   parseSalaryFromMainText,
-  pickNextFallbackSignal,
   extractJobIdFromDetailPane,
   extractJobIdFromTrackingScope,
   readCollectedJobLinks,
   sanitizeDescription,
   writeCollectedJobLinks,
 };
+
+
 
 
 

@@ -25,7 +25,14 @@
 - Do not experiment with alternate Windows/UNC workdir shells once a WSL command pattern has already been proven to work for the current task.
 - If a Windows-WSL issue is solved with a reusable workflow, add a short repository rule for it here before moving on.
 
+## Git Workflow
+- Before committing, run git status --short from WSL and confirm which files should be included.
+- Stage intended files explicitly, then commit from WSL.
+- After committing, immediately run git log -1 --oneline and git status --short from WSL to confirm the commit actually landed and the worktree is clean.
+- If a commit message is getting mangled by Windows/WSL quoting, do not keep retrying nested shell quoting. Either use a simple safe message without spaces or create the message inside WSL and use git commit -F <message-file>.
+
 ## Documentation
 - Treat README and other Chinese text files as encoding-sensitive.
 - Edit those files using stable WSL-based methods only.
+
 

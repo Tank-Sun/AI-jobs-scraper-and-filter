@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +18,6 @@ const {
   parseHeaderFromMainText,
   parseTotalResultsCount,
   parseCompanySizeFromMainText,
-  pickNextFallbackSignal,
   extractJobIdFromDetailPane,
   extractJobIdFromTrackingScope,
   parseSalaryFromMainText,
@@ -313,18 +312,6 @@ test("hasLinkCollectionStalled only trips after 30 seconds with at least one sav
 });
 
 
-test("pickNextFallbackSignal always picks the next unresolved card from the current DOM snapshot", () => {
-  const signals = [
-    { index: 0, text: 'Bell role', hasText: true, jobId: null },
-    { index: 1, text: 'Affirm role', hasText: true, jobId: null },
-    { index: 2, text: 'Direct hit', hasText: true, jobId: '4388173035' },
-  ];
-
-  assert.deepEqual(pickNextFallbackSignal(signals, new Set()), signals[0]);
-  assert.deepEqual(pickNextFallbackSignal(signals, new Set(['Bell role'])), signals[1]);
-  assert.equal(pickNextFallbackSignal(signals, new Set(['Bell role', 'Affirm role'])), undefined);
-});
-
 test("extractJobIdFromDetailPane reads the selected job id from detail links", async () => {
   const page = {
     locator(selector) {
@@ -402,3 +389,4 @@ test("parseSalaryFromMainText extracts only explicit pure annual salary formats"
 test("sanitizeDescription trims LinkedIn noise markers", () => {
   assert.equal(sanitizeDescription("We're hiring?more Show less"), "We're hiring");
 });
+
