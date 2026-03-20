@@ -507,6 +507,91 @@ function buildSignalDiagnosticKey(signal) {
   return normalizeWhitespace(signal.text || '').slice(0, 180);
 }
 
+function trackCollectedLink(links, seen, jobId, stallState) {
+  if (!jobId || seen.has(jobId)) {
+    return false;
+  }
+
+  seen.add(jobId);
+  links.push(buildLinkedInJobUrl(jobId));
+  if (stallState) {
+    stallState.lastAddedAt = Date.now();
+  }
+  return true;
+}
+
+async function resolveSignalJobId(page, cardHandle, previousJobId, timeoutMs = 1200) {
+  let clicked = await triggerJobCardSelection(cardHandle);
+  if (!clicked) {
+    clicked = await cardHandle.click({ force: true, timeout: 1500 }).then(() => true).catch(() => false);
+  }
+  if (!clicked) {
+    return null;
+  }
+
+  let jobId = await waitForDetailPaneJobIdChange(page, previousJobId, timeoutMs);
+  if (!jobId) {
+    jobId = await extractJobIdFromDetailPane(page);
+  }
+  if (!jobId) {
+    jobId = getCurrentJobIdFromUrl(page.url());
+  }
+  return jobId;
+}
+
+async function retryUnresolvedSignals(page, unresolvedSignals, links, seen, stallState, limit) {
+  if (unresolvedSignals.length === 0 || links.length >= limit) {
+    return unresolvedSignals;
+  }
+
+  await page.waitForTimeout(400);
+  const { locator: liveCards } = await getJobCardsState(page);
+  const liveSignals = (await inspectJobCards(liveCards)).filter((signal) => signal.hasText);
+  const liveHandles = await liveCards.elementHandles().catch(() => []);
+  const usedLiveIndexes = new Set();
+  const stillUnresolved = [];
+
+  for (const originalSignal of unresolvedSignals) {
+    if (links.length >= limit) {
+      stillUnresolved.push(originalSignal);
+      continue;
+    }
+
+    const signalKey = buildSignalDiagnosticKey(originalSignal);
+    const matchingSignal = liveSignals.find((signal) => {
+      if (usedLiveIndexes.has(signal.index)) {
+        return false;
+      }
+      return buildSignalDiagnosticKey(signal) === signalKey;
+    });
+
+    if (!matchingSignal) {
+      stillUnresolved.push(originalSignal);
+      continue;
+    }
+
+    usedLiveIndexes.add(matchingSignal.index);
+
+    if (matchingSignal.jobId && trackCollectedLink(links, seen, matchingSignal.jobId, stallState)) {
+      continue;
+    }
+
+    const cardHandle = liveHandles[matchingSignal.index];
+    if (!cardHandle) {
+      stillUnresolved.push(originalSignal);
+      continue;
+    }
+
+    const previousJobId = getCurrentJobIdFromUrl(page.url());
+    const jobId = await resolveSignalJobId(page, cardHandle, previousJobId, 2200);
+    if (!trackCollectedLink(links, seen, jobId, stallState)) {
+      stillUnresolved.push(originalSignal);
+    }
+  }
+
+  return stillUnresolved;
+}
+
 async function collectJobLinks(page, limit, options = {}) {
   const { stallState = null, lastPage = false, snapshotSignals = null } = options;
   const startedAt = Date.now();
@@ -516,16 +601,30 @@ async function collectJobLinks(page, limit, options = {}) {
   const pageSignals = (snapshotSignals ?? await inspectJobCards(cards)).filter((signal) => signal.hasText);
   const cardHandles = await cards.elementHandles().catch(() => []);
   const unresolvedSignals = [];
+  let selectedSeedCount = 0;
 
   const selectedJobId = getCurrentJobIdFromUrl(page.url());
+  let selectedSeedKey = '';
   if (selectedJobId) {
-    seen.add(selectedJobId);
-    links.push(buildLinkedInJobUrl(selectedJobId));
-    if (stallState) {
-      stallState.lastAddedAt = Date.now();
+    if (trackCollectedLink(links, seen, selectedJobId, stallState)) {
+      selectedSeedCount = 1;
+    }
+    const selectedSignal = pageSignals.find((signal) => signal.jobId === selectedJobId);
+    if (selectedSignal) {
+      selectedSeedKey = buildSignalDiagnosticKey(selectedSignal);
     }
     if (links.length >= limit) {
-      return { links, unresolvedSignals };
+      return {
+        links,
+        unresolvedSignals,
+        stats: {
+          selectedSeedCount,
+          initialAddedCount: links.length,
+          initialPassAddedCount: Math.max(0, links.length - selectedSeedCount),
+          retryRecoveredCount: 0,
+          finalUnresolvedCount: 0,
+        },
+      };
     }
   }
 
@@ -539,12 +638,7 @@ async function collectJobLinks(page, limit, options = {}) {
       break;
     }
 
-    if (signal.jobId && !seen.has(signal.jobId)) {
-      seen.add(signal.jobId);
-      links.push(buildLinkedInJobUrl(signal.jobId));
-      if (stallState) {
-        stallState.lastAddedAt = Date.now();
-      }
+    if (signal.jobId && trackCollectedLink(links, seen, signal.jobId, stallState)) {
       continue;
     }
 
@@ -555,39 +649,34 @@ async function collectJobLinks(page, limit, options = {}) {
     }
 
     const previousJobId = getCurrentJobIdFromUrl(page.url());
-    let clicked = await triggerJobCardSelection(cardHandle);
-    if (!clicked) {
-      clicked = await cardHandle.click({ force: true, timeout: 1500 }).then(() => true).catch(() => false);
-    }
-    if (!clicked) {
-      unresolvedSignals.push(signal);
-      continue;
-    }
-
-    let jobId = await waitForDetailPaneJobIdChange(page, previousJobId);
-    if (!jobId) {
-      jobId = await extractJobIdFromDetailPane(page);
-    }
-    if (!jobId) {
-      jobId = getCurrentJobIdFromUrl(page.url());
-    }
-
-    if (!jobId || seen.has(jobId)) {
-      unresolvedSignals.push(signal);
-      continue;
-    }
-
-    seen.add(jobId);
-    links.push(buildLinkedInJobUrl(jobId));
-    if (stallState) {
-      stallState.lastAddedAt = Date.now();
+    const jobId = await resolveSignalJobId(page, cardHandle, previousJobId, 1200);
+    if (!trackCollectedLink(links, seen, jobId, stallState)) {
+      if (!(selectedSeedKey && buildSignalDiagnosticKey(signal) === selectedSeedKey)) {
+        unresolvedSignals.push(signal);
+      }
     }
   }
+
+  const initialAddedCount = links.length;
+  const initialPassAddedCount = Math.max(0, initialAddedCount - selectedSeedCount);
+  const remainingUnresolved = await retryUnresolvedSignals(page, unresolvedSignals, links, seen, stallState, limit);
+  const retryRecoveredCount = links.length - initialAddedCount;
 
   if (lastPage) {
     console.log(`[scrape] Last page collect finished in ${Date.now() - startedAt}ms`);
   }
-  return { links, unresolvedSignals };
+  return {
+    links,
+    unresolvedSignals: remainingUnresolved,
+    initialUnresolvedSignals: unresolvedSignals,
+    stats: {
+      selectedSeedCount,
+      initialAddedCount,
+      initialPassAddedCount,
+      retryRecoveredCount,
+      finalUnresolvedCount: remainingUnresolved.length,
+    },
+  };
 }
 
 async function collectJobLinksAcrossPages(page, limit, options = {}) {
@@ -648,21 +737,46 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
 
     let addedThisPage = 0;
 
-    const { links: visibleLinks, unresolvedSignals } = await collectJobLinks(page, limit - links.length, { stallState, lastPage, snapshotSignals });
+    const {
+      links: visibleLinks,
+      unresolvedSignals,
+      initialUnresolvedSignals = [],
+      stats = {
+        selectedSeedCount: 0,
+        initialAddedCount: 0,
+        retryRecoveredCount: 0,
+        finalUnresolvedCount: unresolvedSignals.length,
+      },
+    } = await collectJobLinks(page, limit - links.length, { stallState, lastPage, snapshotSignals });
     addedThisPage += await mergeCollectedLinks(visibleLinks);
 
-    const unresolvedDiagnostics = unresolvedSignals
+    const initialUnresolvedDiagnostics = initialUnresolvedSignals
       .map((signal) => buildSignalDiagnosticKey(signal))
       .filter(Boolean)
       .filter((value, index, values) => values.indexOf(value) === index)
       .slice(0, 5);
 
+    const finalUnresolvedDiagnostics = unresolvedSignals
+      .map((signal) => buildSignalDiagnosticKey(signal))
+      .filter(Boolean)
+      .filter((value, index, values) => values.indexOf(value) === index)
+      .slice(0, 5);
+
+    const fullyCollectedPage = visibleCount > 0 && addedThisPage >= visibleCount;
+    const effectiveFinalUnresolvedCount = fullyCollectedPage ? 0 : stats.finalUnresolvedCount;
+    const effectiveFinalUnresolvedDiagnostics = fullyCollectedPage ? [] : finalUnresolvedDiagnostics;
+
     if (visibleCount > 0) {
       console.log(`[scrape] Collected ${addedThisPage}/${visibleCount} visible jobs on this page; moving on`);
+      console.log(`[scrape] Page debug: selected seed ${stats.selectedSeedCount}, first pass added ${stats.initialPassAddedCount}, first pass total ${stats.initialAddedCount}, retry recovered ${stats.retryRecoveredCount}, still unresolved ${effectiveFinalUnresolvedCount}`);
     }
 
-    if (unresolvedDiagnostics.length > 0) {
-      console.log(`[scrape] Unresolved cards on this page: ${unresolvedDiagnostics.join(' || ')}`);
+    if (initialUnresolvedDiagnostics.length > 0) {
+      console.log(`[scrape] Initial unresolved cards: ${initialUnresolvedDiagnostics.join(' || ')}`);
+    }
+
+    if (effectiveFinalUnresolvedDiagnostics.length > 0) {
+      console.log(`[scrape] Still unresolved after retry: ${effectiveFinalUnresolvedDiagnostics.join(' || ')}`);
     }
 
     if (links.length >= limit) {
