@@ -19,6 +19,8 @@ const {
   parseTotalResultsCount,
   parseCompanySizeFromMainText,
   extractJobIdFromDetailPane,
+  waitForDetailPaneJobIdChange,
+  triggerJobCardSelection,
   extractJobIdFromTrackingScope,
   parseSalaryFromMainText,
   readCollectedJobLinks,
@@ -311,6 +313,52 @@ test("hasLinkCollectionStalled only trips after 30 seconds with at least one sav
   assert.equal(hasLinkCollectionStalled({ lastLinkAddedAt: 10_000, collectedCount: 5, now: 40_000 }), true);
 });
 
+
+test("triggerJobCardSelection uses a direct DOM click", async () => {
+  let clicked = 0;
+  const handle = {
+    evaluate: async (fn) => {
+      fn({ click: () => { clicked += 1; } });
+    },
+  };
+
+  assert.equal(await triggerJobCardSelection(handle), true);
+  assert.equal(clicked, 1);
+});
+
+test("triggerJobCardSelection returns false when DOM click throws", async () => {
+  const handle = {
+    evaluate: async () => {
+      throw new Error('detached');
+    },
+  };
+
+  assert.equal(await triggerJobCardSelection(handle), false);
+});
+
+test("waitForDetailPaneJobIdChange returns the new detail-pane job id after a click-triggered change", async () => {
+  let waits = 0;
+  const page = {
+    _url: 'https://www.linkedin.com/jobs/search-results/?currentJobId=111',
+    url() {
+      return this._url;
+    },
+    locator(selector) {
+      assert.equal(selector, 'main a[href*="/jobs/view/"], aside a[href*="/jobs/view/"]');
+      return {
+        evaluateAll: async (fn) => fn([
+          { getAttribute: () => waits >= 1 ? 'https://www.linkedin.com/jobs/view/222/' : 'https://www.linkedin.com/jobs/view/111/' },
+        ]),
+      };
+    },
+    waitForTimeout: async () => {
+      waits += 1;
+      page._url = 'https://www.linkedin.com/jobs/search-results/?currentJobId=222';
+    },
+  };
+
+  assert.equal(await waitForDetailPaneJobIdChange(page, '111', 500), '222');
+});
 
 test("extractJobIdFromDetailPane reads the selected job id from detail links", async () => {
   const page = {
