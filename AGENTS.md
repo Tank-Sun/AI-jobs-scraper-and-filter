@@ -1,4 +1,4 @@
-# Repository Working Rules
+﻿# Repository Working Rules
 
 ## Environment
 - Default to WSL for all repository work.
@@ -9,12 +9,23 @@
 - Do not use apply_patch in this repository.
 - For non-trivial edits, write a temporary script into the WSL filesystem and execute it from WSL.
 - Prefer direct WSL file edits over shell one-liners that depend on fragile cross-shell quoting.
+- Do not use patch-style string-splicing edits for content with nested quotes, Chinese text, or Windows paths. In those cases, write a WSL temp script that rewrites the target block directly, then read the file back to verify the result.
+
+## State Management
+- After context compression or interruptions, treat the most recently confirmed successful state as the baseline. Do not rerun or re-debug steps that were already confirmed unless there is new evidence they regressed.
+- Before doing new investigation, first read the current file state or current terminal output from WSL and continue from that state instead of replaying stale reasoning.
 
 ## Validation
 - Run tests from WSL.
 - After edits, verify the changed files or behavior from WSL before reporting completion.
 - When code search tooling like `rg` fails in the current environment, fall back to simpler WSL-native reads such as `grep`, `sed`, or direct file slices instead of retrying fragile search commands.
 
+## Command Patterns
+- Preferred cross-boundary pattern: use PowerShell only to invoke `wsl.exe -d Ubuntu-24.04 --cd /home/tank/job-search-2026/jobs-filter ...` and do the real work inside WSL.
+- Do not experiment with alternate Windows/UNC workdir shells once a WSL command pattern has already been proven to work for the current task.
+- If a Windows-WSL issue is solved with a reusable workflow, add a short repository rule for it here before moving on.
+
 ## Documentation
 - Treat README and other Chinese text files as encoding-sensitive.
 - Edit those files using stable WSL-based methods only.
+

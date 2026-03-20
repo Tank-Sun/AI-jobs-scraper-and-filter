@@ -10,6 +10,7 @@ const {
   buildSearchResultsPageUrl,
   getCollectedJobLinksPath,
   getValidJobCardIndexes,
+  goToNextResultsPage,
   hasLinkCollectionStalled,
   isLastPaginationPage,
   isNoResultsPage,
@@ -17,12 +18,74 @@ const {
   parseHeaderFromMainText,
   parseTotalResultsCount,
   parseCompanySizeFromMainText,
+  pickNextFallbackSignal,
+  extractJobIdFromDetailPane,
   extractJobIdFromTrackingScope,
   parseSalaryFromMainText,
   readCollectedJobLinks,
   sanitizeDescription,
   writeCollectedJobLinks,
 } = __testables;
+
+test("goToNextResultsPage prefers the visible Next button before falling back to a direct URL", async () => {
+  let clicked = 0;
+  const waits = [];
+  const page = {
+    _url: 'https://www.linkedin.com/jobs/search-results/?currentJobId=123',
+    url() {
+      return this._url;
+    },
+    locator(selector) {
+      assert.match(selector, /pagination-controls-next-button-visible/);
+      return {
+        first: () => ({
+          count: async () => 1,
+          click: async () => {
+            clicked += 1;
+            page._url = 'https://www.linkedin.com/jobs/search-results/?start=25';
+          },
+        }),
+      };
+    },
+    waitForTimeout: async (ms) => {
+      waits.push(ms);
+    },
+    goto: async () => {
+      throw new Error('goto should not be used when next button succeeds');
+    },
+  };
+
+  await goToNextResultsPage(page, 25);
+  assert.equal(clicked, 1);
+  assert.equal(page.url(), 'https://www.linkedin.com/jobs/search-results/?start=25');
+  assert.ok(waits.length >= 1);
+});
+
+test("goToNextResultsPage falls back to a direct URL when the next button is unavailable", async () => {
+  const calls = [];
+  const page = {
+    _url: 'https://www.linkedin.com/jobs/search-results/?currentJobId=123&keywords=software%20developer',
+    url() {
+      return this._url;
+    },
+    locator() {
+      return {
+        first: () => ({
+          count: async () => 0,
+          click: async () => {},
+        }),
+      };
+    },
+    waitForTimeout: async () => {},
+    goto: async (url) => {
+      calls.push(url);
+      page._url = url;
+    },
+  };
+
+  await goToNextResultsPage(page, 25);
+  assert.deepEqual(calls, ['https://www.linkedin.com/jobs/search-results/?keywords=software+developer&start=25']);
+});
 
 test("buildSearchResultsPageUrl removes currentJobId and advances start", () => {
   const nextPageUrl = buildSearchResultsPageUrl(
@@ -249,6 +312,34 @@ test("hasLinkCollectionStalled only trips after 30 seconds with at least one sav
   assert.equal(hasLinkCollectionStalled({ lastLinkAddedAt: 10_000, collectedCount: 5, now: 40_000 }), true);
 });
 
+
+test("pickNextFallbackSignal always picks the next unresolved card from the current DOM snapshot", () => {
+  const signals = [
+    { index: 0, text: 'Bell role', hasText: true, jobId: null },
+    { index: 1, text: 'Affirm role', hasText: true, jobId: null },
+    { index: 2, text: 'Direct hit', hasText: true, jobId: '4388173035' },
+  ];
+
+  assert.deepEqual(pickNextFallbackSignal(signals, new Set()), signals[0]);
+  assert.deepEqual(pickNextFallbackSignal(signals, new Set(['Bell role'])), signals[1]);
+  assert.equal(pickNextFallbackSignal(signals, new Set(['Bell role', 'Affirm role'])), undefined);
+});
+
+test("extractJobIdFromDetailPane reads the selected job id from detail links", async () => {
+  const page = {
+    locator(selector) {
+      assert.equal(selector, 'main a[href*="/jobs/view/"], aside a[href*="/jobs/view/"]');
+      return {
+        evaluateAll: async (fn) => fn([
+          { getAttribute: () => 'https://www.linkedin.com/jobs/view/4388173035/?trackingId=abc' },
+          { getAttribute: () => null },
+        ]),
+      };
+    },
+  };
+
+  assert.equal(await extractJobIdFromDetailPane(page), '4388173035');
+});
 
 test("extractJobIdFromTrackingScope decodes LinkedIn tracking buffers", () => {
   const raw = JSON.stringify([{

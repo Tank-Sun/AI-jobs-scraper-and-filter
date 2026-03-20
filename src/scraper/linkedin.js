@@ -182,7 +182,7 @@ async function inspectJobCards(locator) {
       for (const raw of trackingValues) {
         const jobId = extractJobIdFromTrackingScope(raw);
         if (jobId) {
-          return [{ index, hasText, jobId }];
+          return [{ index, text, hasText, jobId }];
         }
       }
 
@@ -192,13 +192,17 @@ async function inspectJobCards(locator) {
       for (const href of hrefs) {
         const jobId = extractJobIdFromHref(href);
         if (jobId) {
-          return [{ index, hasText, jobId }];
+          return [{ index, text, hasText, jobId }];
         }
       }
 
-      return [{ index, hasText, jobId: null }];
+      return [{ index, text, hasText, jobId: null }];
     });
   }).catch(() => []);
+}
+
+function pickNextFallbackSignal(cardSignals, attemptedTexts) {
+  return cardSignals.find((signal) => signal.hasText && !signal.jobId && !attemptedTexts.has(signal.text));
 }
 
 function scoreJobsPageCandidate({ url, cardCount }) {
@@ -290,6 +294,34 @@ function buildSearchResultsPageUrl(urlValue, start) {
   return url.toString();
 }
 
+async function goToNextResultsPage(page, start) {
+  const previousUrl = page.url();
+  const nextButton = page.locator('[data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next:not([disabled]), button[aria-label="Next"]:not([disabled]), button[aria-label="Next Page"]:not([disabled])').first();
+
+  const nextCount = await nextButton.count().catch(() => 0);
+  if (nextCount > 0) {
+    console.log(`[scrape] Moving to next page via Next button (start=${start})`);
+    await nextButton.click({ timeout: 3000 }).catch(() => {});
+
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(250);
+      const currentUrl = page.url();
+      if (currentUrl !== previousUrl) {
+        return;
+      }
+    }
+  }
+
+  const nextPageUrl = buildSearchResultsPageUrl(previousUrl, start);
+  if (nextPageUrl === previousUrl) {
+    return;
+  }
+
+  console.log(`[scrape] Moving to next page via URL (start=${start})`);
+  await page.goto(nextPageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+}
+
 function getCurrentJobIdFromUrl(urlValue) {
   try {
     const url = new URL(urlValue);
@@ -361,6 +393,15 @@ async function extractJobIdFromCard(card) {
 
   const hrefs = await card
     .locator('a[href]')
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute('href')).filter(Boolean))
+    .catch(() => []);
+
+  return hrefs.map(extractJobIdFromHref).find(Boolean) ?? null;
+}
+
+async function extractJobIdFromDetailPane(page) {
+  const hrefs = await page
+    .locator('main a[href*="/jobs/view/"], aside a[href*="/jobs/view/"]')
     .evaluateAll((elements) => elements.map((element) => element.getAttribute('href')).filter(Boolean))
     .catch(() => []);
 
@@ -483,16 +524,23 @@ async function collectJobLinks(page, limit, options = {}) {
     }
   }
 
-  for (const signal of cardSignals) {
+  const attemptedFallbackTexts = new Set();
+
+  while (true) {
     if (stallState && hasLinkCollectionStalled({
       lastLinkAddedAt: stallState.lastAddedAt,
       collectedCount: stallState.collectedCount,
     })) {
       break;
     }
-    if (!signal.hasText || signal.jobId) {
-      continue;
+
+    const freshSignals = await inspectJobCards(cards);
+    const signal = pickNextFallbackSignal(freshSignals, attemptedFallbackTexts);
+    if (!signal) {
+      break;
     }
+
+    attemptedFallbackTexts.add(signal.text);
 
     const card = cards.nth(signal.index);
     await card.scrollIntoViewIfNeeded({ timeout: 1000 }).catch(() => {});
@@ -504,10 +552,19 @@ async function collectJobLinks(page, limit, options = {}) {
 
       for (let attempt = 0; attempt < 4; attempt += 1) {
         await page.waitForTimeout(200);
+        jobId = await extractJobIdFromDetailPane(page);
+        if (jobId) {
+          break;
+        }
+
         jobId = getCurrentJobIdFromUrl(page.url());
         if (jobId && jobId !== previousJobId) {
           break;
         }
+      }
+
+      if (!jobId) {
+        jobId = await extractJobIdFromDetailPane(page);
       }
 
       if (!jobId) {
@@ -592,14 +649,19 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
     const visibleLinks = await collectJobLinks(page, limit - links.length, { stallState, lastPage });
     addedThisPage += await mergeCollectedLinks(visibleLinks);
 
-    if (links.length >= limit) {
-      break;
+    if (!lastPage) {
+      const { count: cardCount } = await getJobCardsState(page);
+      if (cardCount > 0 && addedThisPage >= Math.max(cardCount - 1, 1)) {
+        console.log(`[scrape] Collected most visible jobs on this page (${addedThisPage}/${cardCount}); skipping second-pass fallback and moving on`);
+      } else if (links.length < limit) {
+        await autoScrollJobsList(page);
+        const scrolledLinks = await collectJobLinks(page, limit - links.length, { stallState, lastPage: false });
+        addedThisPage += await mergeCollectedLinks(scrolledLinks);
+      }
     }
 
-    if (!lastPage) {
-      await autoScrollJobsList(page);
-      const scrolledLinks = await collectJobLinks(page, limit - links.length, { stallState, lastPage: false });
-      addedThisPage += await mergeCollectedLinks(scrolledLinks);
+    if (links.length >= limit) {
+      break;
     }
 
     if (links.length >= limit) {
@@ -619,13 +681,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
 
     stagnantPages = addedThisPage === 0 ? stagnantPages + 1 : 0;
     start += 25;
-
-    const nextPageUrl = buildSearchResultsPageUrl(page.url(), start);
-    if (nextPageUrl === page.url()) {
-      break;
-    }
-
-    await page.goto(nextPageUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await goToNextResultsPage(page, start);
   }
 
   return links;
@@ -998,12 +1054,15 @@ export const __testables = {
   parseCompanySizeFromMainText,
   getCollectedJobLinksPath,
   getValidJobCardIndexes,
+  goToNextResultsPage,
   hasLinkCollectionStalled,
   selectJobLinksForDetailScrape,
   isLastPaginationPage,
   isNoResultsPage,
   parseTotalResultsCount,
   parseSalaryFromMainText,
+  pickNextFallbackSignal,
+  extractJobIdFromDetailPane,
   extractJobIdFromTrackingScope,
   readCollectedJobLinks,
   sanitizeDescription,
