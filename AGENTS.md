@@ -21,6 +21,7 @@
 - When code search tooling like `rg` fails in the current environment, fall back to simpler WSL-native reads such as `grep`, `sed`, or direct file slices instead of retrying fragile search commands.
 
 ## Command Patterns
+- Before doing any repository work, read AGENTS.md first and then use only the canonical `wsl.exe -d Ubuntu-24.04 --cd /home/tank/job-search-2026/jobs-filter ...` path for commands. If a command path deviates from that rule, stop and reset instead of experimenting with alternate shells or quoting layers.
 - Preferred cross-boundary pattern: use PowerShell only to invoke `wsl.exe -d Ubuntu-24.04 --cd /home/tank/job-search-2026/jobs-filter ...` and do the real work inside WSL.
 - Do not experiment with alternate Windows/UNC workdir shells once a WSL command pattern has already been proven to work for the current task.
 - If a Windows-WSL issue is solved with a reusable workflow, add a short repository rule for it here before moving on.

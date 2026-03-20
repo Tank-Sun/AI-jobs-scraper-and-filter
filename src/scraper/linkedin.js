@@ -503,6 +503,10 @@ async function isLastPaginationPage(page) {
   return currentPage === Math.max(...pageNumbers);
 }
 
+function buildSignalDiagnosticKey(signal) {
+  return normalizeWhitespace(signal.text || '').slice(0, 180);
+}
+
 async function collectJobLinks(page, limit, options = {}) {
   const { stallState = null, lastPage = false, snapshotSignals = null } = options;
   const startedAt = Date.now();
@@ -511,6 +515,7 @@ async function collectJobLinks(page, limit, options = {}) {
   const seen = new Set();
   const pageSignals = (snapshotSignals ?? await inspectJobCards(cards)).filter((signal) => signal.hasText);
   const cardHandles = await cards.elementHandles().catch(() => []);
+  const unresolvedSignals = [];
 
   const selectedJobId = getCurrentJobIdFromUrl(page.url());
   if (selectedJobId) {
@@ -520,7 +525,7 @@ async function collectJobLinks(page, limit, options = {}) {
       stallState.lastAddedAt = Date.now();
     }
     if (links.length >= limit) {
-      return links;
+      return { links, unresolvedSignals };
     }
   }
 
@@ -545,6 +550,7 @@ async function collectJobLinks(page, limit, options = {}) {
 
     const cardHandle = cardHandles[signal.index];
     if (!cardHandle) {
+      unresolvedSignals.push(signal);
       continue;
     }
 
@@ -554,6 +560,7 @@ async function collectJobLinks(page, limit, options = {}) {
       clicked = await cardHandle.click({ force: true, timeout: 1500 }).then(() => true).catch(() => false);
     }
     if (!clicked) {
+      unresolvedSignals.push(signal);
       continue;
     }
 
@@ -566,6 +573,7 @@ async function collectJobLinks(page, limit, options = {}) {
     }
 
     if (!jobId || seen.has(jobId)) {
+      unresolvedSignals.push(signal);
       continue;
     }
 
@@ -579,7 +587,7 @@ async function collectJobLinks(page, limit, options = {}) {
   if (lastPage) {
     console.log(`[scrape] Last page collect finished in ${Date.now() - startedAt}ms`);
   }
-  return links;
+  return { links, unresolvedSignals };
 }
 
 async function collectJobLinksAcrossPages(page, limit, options = {}) {
@@ -640,11 +648,21 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
 
     let addedThisPage = 0;
 
-    const visibleLinks = await collectJobLinks(page, limit - links.length, { stallState, lastPage, snapshotSignals });
+    const { links: visibleLinks, unresolvedSignals } = await collectJobLinks(page, limit - links.length, { stallState, lastPage, snapshotSignals });
     addedThisPage += await mergeCollectedLinks(visibleLinks);
 
-    if (!lastPage && visibleCount > 0) {
+    const unresolvedDiagnostics = unresolvedSignals
+      .map((signal) => buildSignalDiagnosticKey(signal))
+      .filter(Boolean)
+      .filter((value, index, values) => values.indexOf(value) === index)
+      .slice(0, 5);
+
+    if (visibleCount > 0) {
       console.log(`[scrape] Collected ${addedThisPage}/${visibleCount} visible jobs on this page; moving on`);
+    }
+
+    if (unresolvedDiagnostics.length > 0) {
+      console.log(`[scrape] Unresolved cards on this page: ${unresolvedDiagnostics.join(' || ')}`);
     }
 
     if (links.length >= limit) {
@@ -1039,6 +1057,7 @@ export const __testables = {
   parseHeaderFromMainText,
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
+  buildSignalDiagnosticKey,
   getCollectedJobLinksPath,
   getValidJobCardIndexes,
   goToNextResultsPage,
