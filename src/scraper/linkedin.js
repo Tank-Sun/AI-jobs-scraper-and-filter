@@ -459,19 +459,30 @@ async function isLastPaginationPage(page) {
     return true;
   }
 
-  const nextButton = page.locator('[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]');
-  const nextCount = await nextButton.count().catch(() => 0);
-  if (nextCount > 0) {
-    const testId = await nextButton.first().getAttribute('data-testid').catch(() => null);
-    const disabledAttr = await nextButton.first().getAttribute('disabled').catch(() => null);
-    const ariaDisabled = await nextButton.first().getAttribute('aria-disabled').catch(() => null);
-    const className = await nextButton.first().getAttribute('class').catch(() => '');
-    if (testId === 'pagination-controls-next-button-hidden') {
-      return true;
-    }
-    if (disabledAttr !== null || ariaDisabled === 'true' || /disabled/i.test(className ?? '')) {
-      return true;
-    }
+  const nextButtons = page.locator('[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]');
+  const nextStates = await nextButtons.evaluateAll((elements) => elements.map((element) => {
+    const htmlElement = element;
+    const style = globalThis.getComputedStyle ? getComputedStyle(htmlElement) : null;
+    const hiddenByLayout = 'offsetParent' in htmlElement ? htmlElement.offsetParent === null : false;
+    return {
+      testId: htmlElement.getAttribute('data-testid'),
+      disabledAttr: htmlElement.getAttribute('disabled'),
+      ariaDisabled: htmlElement.getAttribute('aria-disabled'),
+      className: htmlElement.getAttribute('class') || '',
+      hiddenByLayout,
+      display: style?.display || '',
+      visibility: style?.visibility || '',
+    };
+  })).catch(() => []);
+  if (nextStates.some((state) => {
+    const disabled = state.disabledAttr !== null || state.ariaDisabled == 'true' || /disabled/i.test(state.className || '');
+    const hidden = state.testId == 'pagination-controls-next-button-hidden' || state.hiddenByLayout || state.display == 'none' || state.visibility == 'hidden';
+    return !disabled && !hidden;
+  })) {
+    return false;
+  }
+  if (nextStates.length > 0) {
+    return true;
   }
 
   const indicatorButtons = page.locator('button[data-testid^="pagination-indicator-"]');

@@ -175,7 +175,9 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
         return createLocator({ text: '54 results Alberta, Canada Previous 1 2 3 Next' });
       }
       if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
-        return createLocator({ count: 0 });
+        return {
+          evaluateAll: async () => [],
+        };
       }
       return createLocator({ count: 0 });
     },
@@ -193,7 +195,9 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
         return createLocator({ text: '99+ results Alberta, Canada Previous 1 2 3 Next' });
       }
       if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
-        return createLocator({ attributes: { 'data-testid': 'pagination-controls-next-button-hidden' } });
+        return {
+          evaluateAll: async () => [{ testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: true, display: 'none', visibility: 'hidden' }],
+        };
       }
       return createLocator({ count: 0 });
     },
@@ -211,7 +215,9 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
         return createLocator({ text: '99+ results Alberta, Canada Previous 15 16 17 Next' });
       }
       if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
-        return createLocator({ count: 0 });
+        return {
+          evaluateAll: async () => [],
+        };
       }
       if (selector === 'button[data-testid^="pagination-indicator-"]') {
         return {
@@ -232,7 +238,42 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
     },
   };
 
-  const pageWithMorePages = {
+  const pageWithVisibleNextButCurrentIndicatorAtEdge = {
+  url() {
+    return 'https://www.linkedin.com/jobs/search-results/?start=50';
+  },
+  locator(selector) {
+    if (selector === '[data-view-name="job-search-job-card"]') {
+      return createLocator({ count: 25 });
+    }
+    if (selector === 'body') {
+      return createLocator({ text: '99+ results Alberta, Canada Previous 1 2 3 Next' });
+    }
+    if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+      return {
+        evaluateAll: async () => [{ testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' }],
+      };
+    }
+    if (selector === 'button[data-testid^="pagination-indicator-"]') {
+      return {
+        count: async () => 3,
+        evaluateAll: async () => ['1', '2', '3'],
+        first() {
+          return {
+            textContent: async () => '',
+            getAttribute: async () => null,
+          };
+        },
+      };
+    }
+    if (selector === 'button[data-testid^="pagination-indicator-"][aria-current="true"]') {
+      return createLocator({ text: '3' });
+    }
+    return createLocator({ count: 0 });
+  },
+};
+
+const pageWithMorePages = {
     url() {
       return 'https://www.linkedin.com/jobs/search-results/?start=25';
     },
@@ -244,7 +285,12 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
         return createLocator({ text: '54 results Alberta, Canada Previous 1 2 3 Next' });
       }
       if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
-        return createLocator({ attributes: { 'data-testid': 'pagination-controls-next-button-visible' } });
+        return {
+          evaluateAll: async () => [
+            { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
+            { testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' },
+          ],
+        };
       }
       if (selector === 'button[data-testid^="pagination-indicator-"]') {
         return {
@@ -268,7 +314,50 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
   assert.equal(await isLastPaginationPage(pageWithExactFinalWindow), true);
   assert.equal(await isLastPaginationPage(pageWithHiddenNext), true);
   assert.equal(await isLastPaginationPage(pageWithCurrentIndicatorAtEnd), true);
+  assert.equal(await isLastPaginationPage(pageWithVisibleNextButCurrentIndicatorAtEdge), false);
   assert.equal(await isLastPaginationPage(pageWithMorePages), false);
+});
+
+test("isLastPaginationPage prefers a visible next button even when a hidden next button is also present in the DOM", async () => {
+  const pageWithBothNextStates = {
+    url() {
+      return 'https://www.linkedin.com/jobs/search-results/?start=50';
+    },
+    locator(selector) {
+      if (selector === '[data-view-name="job-search-job-card"]') {
+        return createLocator({ count: 25 });
+      }
+      if (selector === 'body') {
+        return createLocator({ text: '99+ results Greater Vancouver, BC Previous 1 2 3 Next' });
+      }
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [
+            { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
+            { testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' },
+          ],
+        };
+      }
+      if (selector === 'button[data-testid^="pagination-indicator-"]') {
+        return {
+          count: async () => 3,
+          evaluateAll: async () => ['1', '2', '3'],
+          first() {
+            return {
+              textContent: async () => '',
+              getAttribute: async () => null,
+            };
+          },
+        };
+      }
+      if (selector === 'button[data-testid^="pagination-indicator-"][aria-current="true"]') {
+        return createLocator({ text: '3' });
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  assert.equal(await isLastPaginationPage(pageWithBothNextStates), false);
 });
 
 test("collected LinkedIn job URLs are persisted per run and filtered on reload", async () => {
