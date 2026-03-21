@@ -23,6 +23,8 @@ const {
   triggerJobCardSelection,
   extractJobIdFromTrackingScope,
   parseSalaryFromMainText,
+  isPlaywrightTimeoutError,
+  loadJobDetailPage,
   resolveSignalJobId,
   readCollectedJobLinks,
   sanitizeDescription,
@@ -476,6 +478,34 @@ test("waitForDetailPaneJobIdChange returns the new detail-pane job id after a cl
   };
 
   assert.equal(await waitForDetailPaneJobIdChange(page, '111', 500), '222');
+});
+
+test("isPlaywrightTimeoutError recognizes Playwright-style navigation timeouts", () => {
+  assert.equal(isPlaywrightTimeoutError({ name: 'TimeoutError', message: 'page.goto: Timeout 60000ms exceeded.' }), true);
+  assert.equal(isPlaywrightTimeoutError({ message: 'page.goto: Timeout 60000ms exceeded.' }), true);
+  assert.equal(isPlaywrightTimeoutError(new Error('random failure')), false);
+});
+
+test("loadJobDetailPage retries once after a timeout and then succeeds", async () => {
+  const waits = [];
+  let calls = 0;
+  const page = {
+    goto: async () => {
+      calls += 1;
+      if (calls === 1) {
+        const error = new Error('page.goto: Timeout 60000ms exceeded.');
+        error.name = 'TimeoutError';
+        throw error;
+      }
+    },
+    waitForTimeout: async (ms) => {
+      waits.push(ms);
+    },
+  };
+
+  await loadJobDetailPage(page, 'https://www.linkedin.com/jobs/view/123/');
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [1000, 2200]);
 });
 
 test("extractJobIdFromDetailPane reads the selected job id from detail links", async () => {

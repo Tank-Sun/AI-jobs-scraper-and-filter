@@ -1039,9 +1039,39 @@ function parseSalaryFromMainText(mainText) {
   return '';
 }
 
+function isPlaywrightTimeoutError(error) {
+  const message = error?.message || '';
+  return error?.name == 'TimeoutError' || /Timeout\s*\d+ms exceeded/i.test(message) || /page\.goto: Timeout/i.test(message);
+}
+
+async function loadJobDetailPage(page, jobUrl, options = {}) {
+  const {
+    maxAttempts = 2,
+    timeoutMs = 60000,
+    settleMs = 2200,
+  } = options;
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+      await page.waitForTimeout(settleMs);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isPlaywrightTimeoutError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+      console.log(`[scrape] Detail page timeout for ${jobUrl}; retrying (${attempt + 1}/${maxAttempts})`);
+      await page.waitForTimeout(1000);
+    }
+  }
+
+  throw lastError;
+}
+
 async function scrapeJobDetail(page, jobUrl) {
-  await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForTimeout(2200);
+  await loadJobDetailPage(page, jobUrl);
 
   const pageTitle = await page.title();
   const mainText = await textOrEmpty(page.locator('main').first());
@@ -1148,12 +1178,24 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath }) {
     const detailPage = await context.newPage();
     try {
       const jobs = [];
+      let skippedDetailPages = 0;
       for (const [index, jobUrl] of jobLinks.entries()) {
         if (index === 0 || (index + 1) % 10 === 0) {
           console.log(`[scrape] Scraping job ${index + 1}/${jobLinks.length}`);
         }
-        const job = await scrapeJobDetail(detailPage, jobUrl);
-        jobs.push(job);
+        try {
+          const job = await scrapeJobDetail(detailPage, jobUrl);
+          jobs.push(job);
+        } catch (error) {
+          if (!isPlaywrightTimeoutError(error)) {
+            throw error;
+          }
+          skippedDetailPages += 1;
+          console.log(`[scrape] Skipping timed out detail page ${index + 1}/${jobLinks.length}: ${jobUrl}`);
+        }
+      }
+      if (skippedDetailPages > 0) {
+        console.log(`[scrape] Skipped ${skippedDetailPages} timed out detail page(s)`);
       }
       return jobs;
     } finally {
@@ -1198,6 +1240,8 @@ export const __testables = {
   parseTotalResultsCount,
   parseSalaryFromMainText,
   extractJobIdFromDetailPane,
+  isPlaywrightTimeoutError,
+  loadJobDetailPage,
   resolveSignalJobId,
   waitForDetailPaneJobIdChange,
   triggerJobCardSelection,
