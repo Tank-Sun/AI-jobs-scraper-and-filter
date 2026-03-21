@@ -23,6 +23,7 @@ const {
   triggerJobCardSelection,
   extractJobIdFromTrackingScope,
   parseSalaryFromMainText,
+  resolveSignalJobId,
   readCollectedJobLinks,
   sanitizeDescription,
   writeCollectedJobLinks,
@@ -423,6 +424,34 @@ test("triggerJobCardSelection returns false when DOM click throws", async () => 
   };
 
   assert.equal(await triggerJobCardSelection(handle), false);
+});
+
+test("resolveSignalJobId prefers currentJobId from the URL before waiting for the detail pane", async () => {
+  const page = {
+    _url: 'https://www.linkedin.com/jobs/search-results/?currentJobId=111',
+    url() {
+      return this._url;
+    },
+    locator(selector) {
+      assert.equal(selector, 'main a[href*="/jobs/view/"], aside a[href*="/jobs/view/"]');
+      return {
+        evaluateAll: async (fn) => fn([
+          { getAttribute: () => 'https://www.linkedin.com/jobs/view/111/' },
+        ]),
+      };
+    },
+    waitForTimeout: async () => {},
+  };
+  const handle = {
+    evaluate: async (fn) => {
+      fn({ click: () => { page._url = 'https://www.linkedin.com/jobs/search-results/?currentJobId=222'; } });
+    },
+    click: async () => {
+      throw new Error('fallback click should not run');
+    },
+  };
+
+  assert.equal(await resolveSignalJobId(page, handle, '111', 500), '222');
 });
 
 test("waitForDetailPaneJobIdChange returns the new detail-pane job id after a click-triggered change", async () => {

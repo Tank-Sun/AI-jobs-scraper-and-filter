@@ -406,14 +406,14 @@ async function extractJobIdFromDetailPane(page) {
 async function waitForDetailPaneJobIdChange(page, previousJobId, timeoutMs = 1200) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const detailJobId = await extractJobIdFromDetailPane(page);
-    if (detailJobId && detailJobId !== previousJobId) {
-      return detailJobId;
-    }
-
     const currentJobId = getCurrentJobIdFromUrl(page.url());
     if (currentJobId && currentJobId !== previousJobId) {
       return currentJobId;
+    }
+
+    const detailJobId = await extractJobIdFromDetailPane(page);
+    if (detailJobId && detailJobId !== previousJobId) {
+      return detailJobId;
     }
 
     await page.waitForTimeout(150);
@@ -540,12 +540,17 @@ async function resolveSignalJobId(page, cardHandle, previousJobId, timeoutMs = 1
     return null;
   }
 
-  let jobId = await waitForDetailPaneJobIdChange(page, previousJobId, timeoutMs);
-  if (!jobId) {
-    jobId = await extractJobIdFromDetailPane(page);
+  let jobId = getCurrentJobIdFromUrl(page.url());
+  if (jobId && jobId !== previousJobId) {
+    return jobId;
   }
+
+  jobId = await waitForDetailPaneJobIdChange(page, previousJobId, timeoutMs);
   if (!jobId) {
     jobId = getCurrentJobIdFromUrl(page.url());
+  }
+  if (!jobId) {
+    jobId = await extractJobIdFromDetailPane(page);
   }
   return jobId;
 }
@@ -1193,6 +1198,7 @@ export const __testables = {
   parseTotalResultsCount,
   parseSalaryFromMainText,
   extractJobIdFromDetailPane,
+  resolveSignalJobId,
   waitForDetailPaneJobIdChange,
   triggerJobCardSelection,
   extractJobIdFromTrackingScope,
