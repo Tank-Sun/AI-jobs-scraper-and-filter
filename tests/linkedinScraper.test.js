@@ -17,6 +17,7 @@ const {
   isNoResultsPage,
   selectJobLinksForDetailScrape,
   parseHeaderFromMainText,
+  parseMetadataFieldsFromText,
   parseTotalResultsCount,
   parseCompanySizeFromMainText,
   extractJobIdFromDetailPane,
@@ -588,6 +589,27 @@ test("parseHeaderFromMainText splits location, posted time, applicant info, and 
   assert.equal(parsed.location, "Calgary, AB");
   assert.equal(parsed.postedTime, "9 hours ago");
   assert.equal(parsed.applicantInfo, "6 people clicked apply");
+  assert.equal(parsed.employmentType, "Full-time");
+});
+
+test("parseMetadataFieldsFromText parses bullet-separated top-card metadata", () => {
+  const parsed = parseMetadataFieldsFromText("Toronto, ON, Canada · 2 days ago · 48 applicants · Full-time");
+
+  assert.equal(parsed.location, "Toronto, ON, Canada");
+  assert.equal(parsed.postedTime, "2 days ago");
+  assert.equal(parsed.applicantInfo, "48 applicants");
+  assert.equal(parsed.employmentType, "Full-time");
+});
+
+test("parseHeaderFromMainText handles title-first LinkedIn headers with bullet separators", () => {
+  const mainText = "Senior Forward Deployed Developer, Applied AI Google Toronto, ON, Canada · 2 days ago · 48 applicants · Full-time About the job Build things";
+  const pageTitle = "Senior Forward Deployed Developer, Applied AI | Google | LinkedIn";
+
+  const parsed = parseHeaderFromMainText(mainText, pageTitle);
+
+  assert.equal(parsed.location, "Toronto, ON, Canada");
+  assert.equal(parsed.postedTime, "2 days ago");
+  assert.equal(parsed.applicantInfo, "48 applicants");
   assert.equal(parsed.employmentType, "Full-time");
 });
 

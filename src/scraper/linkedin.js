@@ -911,6 +911,7 @@ function sanitizeDescription(text) {
 
 function normalizeLinkedInMainText(text) {
   return normalizeWhitespace(text)
+    .replace(/\s*[·•●▪◦]\s*/g, ' | ')
     .replace(/\s+[路鈥㈣矾]\s+/g, ' | ')
     .replace(/Promoted by hirer/gi, '')
     .replace(/Responses managed off LinkedIn/gi, '')
@@ -934,22 +935,12 @@ function cleanHeaderPart(value) {
     .replace(/Tailor my resume/gi, '')
     .replace(/Create cover letter/gi, '')
     .replace(/Help me stand out/gi, '')
+    .replace(/Message$/i, '')
     .trim();
 }
 
-function parseHeaderFromMainText(mainText, pageTitle) {
-  const normalizedText = normalizeLinkedInMainText(mainText);
-  const titleParts = pageTitle.split(' | ').map((part) => normalizeWhitespace(part));
-  const parsedTitle = titleParts[0] ?? '';
-  const parsedCompany = titleParts[1] ?? '';
-
-  const headerStart = `${parsedCompany}${parsedTitle}`;
-  const startIndex = normalizedText.indexOf(headerStart);
-  const sliced = startIndex >= 0 ? normalizedText.slice(startIndex + headerStart.length).trim() : normalizedText;
-  const aboutIndex = sliced.search(/About the job|About us|About the role|Description|Job Description/i);
-  const headerSegment = (aboutIndex >= 0 ? sliced.slice(0, aboutIndex) : sliced).slice(0, 320).trim();
-
-  const parts = headerSegment
+function parseMetadataFieldsFromText(text) {
+  const parts = normalizeLinkedInMainText(text)
     .split('|')
     .map((part) => cleanHeaderPart(part))
     .map((part) => normalizeWhitespace(part))
@@ -972,24 +963,58 @@ function parseHeaderFromMainText(mainText, pageTitle) {
 
     if (!applicantInfo && applicantMatch) {
       applicantInfo = applicantMatch[0];
+      continue;
     }
 
     if (!employmentType && employmentMatch) {
       employmentType = employmentMatch[1];
+      continue;
     }
 
-    if (!location && !isPostedTime && !applicantMatch && !employmentMatch) {
+    if (!location) {
       location = part;
     }
   }
 
   return {
-    title: parsedTitle,
-    company: parsedCompany,
     location,
     postedTime,
     applicantInfo,
     employmentType,
+  };
+}
+
+function parseHeaderFromMainText(mainText, pageTitle) {
+  const normalizedText = normalizeLinkedInMainText(mainText);
+  const titleParts = pageTitle.split(' | ').map((part) => normalizeWhitespace(part));
+  const parsedTitle = titleParts[0] ?? '';
+  const parsedCompany = titleParts[1] ?? '';
+
+  const headerStarts = [
+    `${parsedCompany}${parsedTitle}`,
+    `${parsedCompany} ${parsedTitle}`,
+    `${parsedTitle}${parsedCompany}`,
+    `${parsedTitle} ${parsedCompany}`,
+  ]
+    .map((value) => normalizeWhitespace(value))
+    .filter(Boolean)
+    .map((value) => ({ value, index: normalizedText.indexOf(value) }))
+    .filter((match) => match.index >= 0)
+    .sort((left, right) => left.index - right.index || right.value.length - left.value.length);
+
+  const headerStart = headerStarts[0] ?? null;
+  const sliced = headerStart ? normalizedText.slice(headerStart.index + headerStart.value.length).trim() : normalizedText;
+  const aboutIndex = sliced.search(/About the job|About us|About the role|Description|Job Description/i);
+  const headerSegment = (aboutIndex >= 0 ? sliced.slice(0, aboutIndex) : sliced).slice(0, 320).trim();
+  const parsedHeader = parseMetadataFieldsFromText(headerSegment);
+
+  return {
+    title: parsedTitle,
+    company: parsedCompany,
+    location: parsedHeader.location,
+    postedTime: parsedHeader.postedTime,
+    applicantInfo: parsedHeader.applicantInfo,
+    employmentType: parsedHeader.employmentType,
   };
 }
 
@@ -1109,6 +1134,10 @@ async function scrapeJobDetail(page, jobUrl) {
   const descriptionFromText = parseDescriptionFromMainText(mainText);
   const companySizeFromText = parseCompanySizeFromMainText(mainText);
   const salaryFromText = parseSalaryFromMainText(mainText);
+  const primaryDescriptionText = await textOrEmpty(
+    page.locator('.job-details-jobs-unified-top-card__primary-description-container, .jobs-unified-top-card__primary-description-container, .jobs-unified-top-card__subtitle-primary-grouping')
+  );
+  const primaryDescription = parseMetadataFieldsFromText(primaryDescriptionText);
 
   const title = firstNonEmpty(
     await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__job-title, .t-24.job-details-jobs-unified-top-card__job-title')),
@@ -1119,15 +1148,18 @@ async function scrapeJobDetail(page, jobUrl) {
     header.company
   );
   const location = firstNonEmpty(
+    primaryDescription.location,
     await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__primary-description-container span').nth(0)),
     header.location
   );
   const postedTime = firstNonEmpty(
+    primaryDescription.postedTime,
     await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__primary-description-container span').nth(1)),
     header.postedTime
   );
   const applicantInfo = firstNonEmpty(
     await textOrEmpty(page.locator('.jobs-unified-top-card__subtitle-secondary-grouping, .job-details-jobs-unified-top-card__tertiary-description')),
+    primaryDescription.applicantInfo,
     header.applicantInfo
   );
   const description = firstNonEmpty(
@@ -1157,7 +1189,7 @@ async function scrapeJobDetail(page, jobUrl) {
     location,
     postedTime,
     applicantInfo,
-    employmentType: firstNonEmpty(parsedCriteria.employmentType, header.employmentType),
+    employmentType: firstNonEmpty(parsedCriteria.employmentType, primaryDescription.employmentType, header.employmentType),
     visaPolicy: inferVisaPolicy(description),
     companySize: firstNonEmpty(parsedCriteria.companySize, companySizeFromText),
     salary: salaryFromText,
@@ -1284,6 +1316,7 @@ export async function collectJobs({ rawJobsPath, limit = 200, cdpUrl, source = '
 export const __testables = {
   buildSearchResultsPageUrl,
   parseHeaderFromMainText,
+  parseMetadataFieldsFromText,
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
   buildSignalDiagnosticKey,
