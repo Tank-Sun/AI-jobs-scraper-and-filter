@@ -24,6 +24,10 @@ function getCollectedJobLinksPath(rawJobsPath) {
   return path.join(path.dirname(rawJobsPath), 'collected-job-links.json');
 }
 
+function getFailedDetailUrlsPath(rawJobsPath) {
+  return path.join(path.dirname(rawJobsPath), 'failed-detail-urls.json');
+}
+
 async function readCollectedJobLinks(rawJobsPath) {
   const jobLinksPath = getCollectedJobLinksPath(rawJobsPath);
 
@@ -47,6 +51,32 @@ async function readCollectedJobLinks(rawJobsPath) {
 async function writeCollectedJobLinks(rawJobsPath, links) {
   const jobLinksPath = getCollectedJobLinksPath(rawJobsPath);
   await writeFile(jobLinksPath, `${JSON.stringify(links, null, 2)}\n`, 'utf8');
+}
+
+async function readFailedDetailUrls(rawJobsPath) {
+  const failedUrlsPath = getFailedDetailUrlsPath(rawJobsPath);
+
+  try {
+    await access(failedUrlsPath);
+    const raw = await readFile(failedUrlsPath, 'utf8');
+    const links = JSON.parse(raw);
+    if (!Array.isArray(links)) {
+      return [];
+    }
+
+    return links.filter((value) => typeof value === 'string' && value.startsWith('https://www.linkedin.com/jobs/view/'));
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function writeFailedDetailUrls(rawJobsPath, links) {
+  const failedUrlsPath = getFailedDetailUrlsPath(rawJobsPath);
+  await writeFile(failedUrlsPath, `${JSON.stringify(links, null, 2)}
+`, 'utf8');
 }
 
 function selectJobLinksForDetailScrape(existingJobLinks, limit) {
@@ -1136,7 +1166,7 @@ async function scrapeJobDetail(page, jobUrl) {
   };
 }
 
-async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath }) {
+async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath, retryFailedDetails = false }) {
   const browser = await chromium.connectOverCDP(cdpUrl);
 
   try {
@@ -1152,32 +1182,44 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath }) {
     console.log(`[scrape] Using jobs page: ${searchPage.url()}`);
     console.log(`[scrape] Detected ${initialCards.count} job cards with selector ${initialCards.selector}`);
     const existingJobLinks = await readCollectedJobLinks(rawJobsPath);
+    const failedDetailUrls = await readFailedDetailUrls(rawJobsPath);
     if (existingJobLinks.length > 0) {
       console.log(`[scrape] Reusing ${existingJobLinks.length} saved links from ${getCollectedJobLinksPath(rawJobsPath)}`);
     }
-    const jobLinks = existingJobLinks.length > 0
-      ? selectJobLinksForDetailScrape(existingJobLinks, limit)
-      : await collectJobLinksAcrossPages(searchPage, limit, {
-          seedLinks: existingJobLinks,
-          onLinkCollected: async (_jobUrl, allJobLinks) => {
-            await writeCollectedJobLinks(rawJobsPath, allJobLinks);
-            const count = allJobLinks.length;
-            if (count === 1 || count % 10 === 0) {
-              console.log(`[scrape] Collected ${count} job links so far`);
-            }
-          },
-        });
-    if (jobLinks.length > 0) {
-      await writeCollectedJobLinks(rawJobsPath, jobLinks);
-    }
-    if (jobLinks.length === 0) {
-      throw new Error('No LinkedIn job links were found on the current page.');
+
+    let jobLinks = [];
+    if (retryFailedDetails) {
+      jobLinks = selectJobLinksForDetailScrape(failedDetailUrls, limit);
+      if (jobLinks.length === 0) {
+        throw new Error(`No failed detail URLs found in ${getFailedDetailUrlsPath(rawJobsPath)}.`);
+      }
+      console.log(`[scrape] Retrying ${jobLinks.length} failed detail URL(s) from ${getFailedDetailUrlsPath(rawJobsPath)}`);
+    } else {
+      jobLinks = existingJobLinks.length > 0
+        ? selectJobLinksForDetailScrape(existingJobLinks, limit)
+        : await collectJobLinksAcrossPages(searchPage, limit, {
+            seedLinks: existingJobLinks,
+            onLinkCollected: async (_jobUrl, allJobLinks) => {
+              await writeCollectedJobLinks(rawJobsPath, allJobLinks);
+              const count = allJobLinks.length;
+              if (count === 1 || count % 10 === 0) {
+                console.log(`[scrape] Collected ${count} job links so far`);
+              }
+            },
+          });
+      if (jobLinks.length > 0) {
+        await writeCollectedJobLinks(rawJobsPath, jobLinks);
+      }
+      if (jobLinks.length === 0) {
+        throw new Error('No LinkedIn job links were found on the current page.');
+      }
     }
 
     console.log(`[scrape] Starting detail scrape for ${jobLinks.length} jobs`);
     const detailPage = await context.newPage();
     try {
       const jobs = [];
+      const remainingFailedDetailUrls = [];
       let skippedDetailPages = 0;
       for (const [index, jobUrl] of jobLinks.entries()) {
         if (index === 0 || (index + 1) % 10 === 0) {
@@ -1191,13 +1233,20 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath }) {
             throw error;
           }
           skippedDetailPages += 1;
+          remainingFailedDetailUrls.push(jobUrl);
           console.log(`[scrape] Skipping timed out detail page ${index + 1}/${jobLinks.length}: ${jobUrl}`);
         }
       }
+      await writeFailedDetailUrls(rawJobsPath, remainingFailedDetailUrls);
       if (skippedDetailPages > 0) {
         console.log(`[scrape] Skipped ${skippedDetailPages} timed out detail page(s)`);
+        console.log(`[scrape] Failed detail URLs saved to ${getFailedDetailUrlsPath(rawJobsPath)}`);
       }
-      return jobs;
+      return {
+        jobs,
+        failedDetailUrls: remainingFailedDetailUrls,
+        attemptedDetailUrls: jobLinks,
+      };
     } finally {
       await detailPage.close();
     }
@@ -1206,14 +1255,18 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath }) {
   }
 }
 
-export async function collectJobs({ rawJobsPath, limit = 200, cdpUrl, source = 'auto' }) {
+export async function collectJobs({ rawJobsPath, limit = 200, cdpUrl, source = 'auto', retryFailedDetails = false }) {
   if (source === 'raw') {
-    return readJobsFromFile(rawJobsPath);
+    return {
+      jobs: await readJobsFromFile(rawJobsPath),
+      failedDetailUrls: await readFailedDetailUrls(rawJobsPath),
+      attemptedDetailUrls: [],
+    };
   }
 
   if (cdpUrl) {
     try {
-      return await scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath });
+      return await scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath, retryFailedDetails });
     } catch (error) {
       if (source === 'live') {
         throw error;
@@ -1221,7 +1274,11 @@ export async function collectJobs({ rawJobsPath, limit = 200, cdpUrl, source = '
     }
   }
 
-  return readJobsFromFile(rawJobsPath);
+  return {
+    jobs: await readJobsFromFile(rawJobsPath),
+    failedDetailUrls: await readFailedDetailUrls(rawJobsPath),
+    attemptedDetailUrls: [],
+  };
 }
 
 export const __testables = {
@@ -1231,6 +1288,7 @@ export const __testables = {
   parseCompanySizeFromMainText,
   buildSignalDiagnosticKey,
   getCollectedJobLinksPath,
+  getFailedDetailUrlsPath,
   getValidJobCardIndexes,
   goToNextResultsPage,
   hasLinkCollectionStalled,
@@ -1247,8 +1305,10 @@ export const __testables = {
   triggerJobCardSelection,
   extractJobIdFromTrackingScope,
   readCollectedJobLinks,
+  readFailedDetailUrls,
   sanitizeDescription,
   writeCollectedJobLinks,
+  writeFailedDetailUrls,
 };
 
 

@@ -72,13 +72,21 @@ cd ~/job-search-2026/jobs-filter
 node src/cli/index.js --mode=scrape --source=live
 ```
 
-### 4. Score the latest scrape result in WSL
+### 4. If you only want to retry timed-out detail pages from a previous run
+
+```bash
+node src/cli/index.js --mode=scrape --source=live --runDir=reports/YOUR_RUN_DIR --retry-failed-details
+```
+
+This reads `failed-detail-urls.json` from that run directory, retries only those detail pages, and merges successful retries back into the same `raw-jobs.json`.
+
+### 5. Score the latest scrape result in WSL
 
 ```bash
 node src/cli/index.js --mode=score
 ```
 
-### 5. If you only want the top 20 shortlist items
+### 6. If you only want the top 20 shortlist items
 
 ```bash
 node src/cli/index.js --mode=score --limit=20
@@ -92,6 +100,7 @@ Only scrapes job details and generates:
 - `raw-jobs.json`
 - `run-summary.json`
 - `collected-job-links.json` (for live scrape)
+- `failed-detail-urls.json` (when some detail pages time out)
 
 ### `score`
 
@@ -133,6 +142,7 @@ Common files:
 - `run-summary.json`: summary numbers for the run
 - `scoring-cache.json`: AI scoring cache
 - `collected-job-links.json`: LinkedIn job URLs already collected during live scrape
+- `failed-detail-urls.json`: detail-page URLs that still timed out and can be retried later
 
 ## If Scrape Gets Stuck Midway
 
@@ -153,6 +163,12 @@ node src/cli/index.js --mode=scrape --source=live --runDir=reports/YOUR_RUN_DIR
 ```
 
 If that directory already contains `collected-job-links.json`, the program will reuse those saved links first and continue scraping details.
+
+If some detail pages timed out, the scraper writes them to `failed-detail-urls.json` in the same run directory. You can retry only those failed detail pages with:
+
+```bash
+node src/cli/index.js --mode=scrape --source=live --runDir=reports/YOUR_RUN_DIR --retry-failed-details
+```
 
 If `raw-jobs.json` already exists, you do not need to rerun scrape. Just run:
 

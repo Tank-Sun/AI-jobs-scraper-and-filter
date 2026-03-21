@@ -9,6 +9,7 @@ import { __testables } from "../src/scraper/linkedin.js";
 const {
   buildSearchResultsPageUrl,
   getCollectedJobLinksPath,
+  getFailedDetailUrlsPath,
   getValidJobCardIndexes,
   goToNextResultsPage,
   hasLinkCollectionStalled,
@@ -27,8 +28,10 @@ const {
   loadJobDetailPage,
   resolveSignalJobId,
   readCollectedJobLinks,
+  readFailedDetailUrls,
   sanitizeDescription,
   writeCollectedJobLinks,
+  writeFailedDetailUrls,
 } = __testables;
 
 test("goToNextResultsPage prefers the visible Next button before falling back to a direct URL", async () => {
@@ -361,6 +364,26 @@ test("isLastPaginationPage prefers a visible next button even when a hidden next
   };
 
   assert.equal(await isLastPaginationPage(pageWithBothNextStates), false);
+});
+
+test("failed LinkedIn detail URLs are persisted per run and filtered on reload", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "linkedin-failed-detail-"));
+  const rawJobsPath = path.join(tempDir, "raw-jobs.json");
+
+  await writeFailedDetailUrls(rawJobsPath, [
+    "https://www.linkedin.com/jobs/view/111/",
+    "https://example.com/not-linkedin",
+    42,
+    "https://www.linkedin.com/jobs/view/222/",
+  ]);
+
+  const savedPath = getFailedDetailUrlsPath(rawJobsPath);
+  const savedText = await readFile(savedPath, "utf8");
+  assert.match(savedText, /111/);
+  assert.deepEqual(await readFailedDetailUrls(rawJobsPath), [
+    "https://www.linkedin.com/jobs/view/111/",
+    "https://www.linkedin.com/jobs/view/222/",
+  ]);
 });
 
 test("collected LinkedIn job URLs are persisted per run and filtered on reload", async () => {

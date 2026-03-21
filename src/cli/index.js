@@ -16,6 +16,33 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..', '..');
 const DEFAULT_REPORT_LIMIT = 30;
 
+function isTrueFlag(value) {
+  return value === 'true';
+}
+
+function mergeJobsByUrl(existingJobs, retriedJobs) {
+  const byUrl = new Map();
+  const order = [];
+
+  for (const job of existingJobs) {
+    const key = job?.jobUrl || `${job?.company ?? ''}::${job?.title ?? ''}::${job?.location ?? ''}`;
+    if (!byUrl.has(key)) {
+      order.push(key);
+    }
+    byUrl.set(key, job);
+  }
+
+  for (const job of retriedJobs) {
+    const key = job?.jobUrl || `${job?.company ?? ''}::${job?.title ?? ''}::${job?.location ?? ''}`;
+    if (!byUrl.has(key)) {
+      order.push(key);
+    }
+    byUrl.set(key, job);
+  }
+
+  return order.map((key) => byUrl.get(key));
+}
+
 function parseArgs(argv) {
   const args = {};
   for (const entry of argv) {
@@ -60,20 +87,28 @@ function printSummary(summary) {
 
 async function scrapeJobsToRunDirectory({ args, source, cdpUrl, mode }) {
   const scrapeLimit = parseScrapeLimit(args.scrapeLimit);
+  const retryFailedDetails = isTrueFlag(args.retryFailedDetails);
   const runContext = await ensureRunDirectory(projectRoot, args.runDir);
   const rawJobsPath = path.join(runContext.runDir, 'raw-jobs.json');
-  const jobs = await collectJobs({
+  const existingJobs = retryFailedDetails ? await readJsonFile(rawJobsPath).catch(() => []) : [];
+  const scrapeResult = await collectJobs({
     rawJobsPath,
     limit: scrapeLimit,
     cdpUrl,
     source,
+    retryFailedDetails,
   });
+  const jobs = retryFailedDetails ? mergeJobsByUrl(existingJobs, scrapeResult.jobs) : scrapeResult.jobs;
 
   const summary = {
     mode,
     jobsSeen: jobs.length,
     source,
     usedCdpUrl: Boolean(cdpUrl),
+    retriedFailedDetails: retryFailedDetails,
+    attemptedDetailUrls: scrapeResult.attemptedDetailUrls.length,
+    remainingFailedDetailUrls: scrapeResult.failedDetailUrls.length,
+    failedDetailUrlsPath: path.join(runContext.runDir, 'failed-detail-urls.json'),
   };
 
   await writeRawJobsSnapshot({

@@ -10,6 +10,8 @@
 - For non-trivial edits, write a temporary script into the WSL filesystem and execute it from WSL.
 - Prefer direct WSL file edits over shell one-liners that depend on fragile cross-shell quoting.
 - Do not use patch-style string-splicing edits for content with nested quotes, Chinese text, or Windows paths. In those cases, write a WSL temp script that rewrites the target block directly, then read the file back to verify the result.
+- If an exact multiline marker replacement fails once, stop and inspect the current file contents from WSL before trying again. Then switch to a smaller stable anchor or direct insertion point instead of retrying the same full-block replacement.
+- Treat exact whole-block string matching as fragile after any prior edits, formatting drift, BOM/newline differences, or partial changes. Do not assume the file still matches the original marker text.
 
 ## State Management
 - After context compression or interruptions, treat the most recently confirmed successful state as the baseline. Do not rerun or re-debug steps that were already confirmed unless there is new evidence they regressed.

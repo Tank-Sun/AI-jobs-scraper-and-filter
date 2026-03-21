@@ -72,13 +72,21 @@ cd ~/job-search-2026/jobs-filter
 node src/cli/index.js --mode=scrape --source=live
 ```
 
-### 4. 在 WSL 对最新一次抓取结果打分
+### 4. 如果只想重抓上一次 timeout 的详情页
+
+```bash
+node src/cli/index.js --mode=scrape --source=live --runDir=reports/YOUR_RUN_DIR --retry-failed-details
+```
+
+这个命令会只读取该 run 目录里的 `failed-detail-urls.json`，重抓这些失败详情，并把成功结果并回原来的 `raw-jobs.json`。
+
+### 5. 在 WSL 对最新一次抓取结果打分
 
 ```bash
 node src/cli/index.js --mode=score
 ```
 
-### 5. 如果只想看前 20 条 shortlist
+### 6. 如果只想看前 20 条 shortlist
 
 ```bash
 node src/cli/index.js --mode=score --limit=20
@@ -92,6 +100,7 @@ node src/cli/index.js --mode=score --limit=20
 - `raw-jobs.json`
 - `run-summary.json`
 - `collected-job-links.json`（live scrape 时）
+- `failed-detail-urls.json`（详情页 timeout 时）
 
 ### `score`
 
@@ -133,6 +142,7 @@ reports/2026-03-16_00-10-43_MT/
 - `run-summary.json`：这次运行的汇总数字
 - `scoring-cache.json`：AI 打分缓存
 - `collected-job-links.json`：live scrape 时已收集到的 LinkedIn job URLs
+- `failed-detail-urls.json`：详情页最终 timeout、可后续重抓的 URLs
 
 ## 如果 Scrape 中途卡住
 
@@ -153,6 +163,12 @@ node src/cli/index.js --mode=scrape --source=live --runDir=reports/YOUR_RUN_DIR
 ```
 
 如果该目录里已经有 `collected-job-links.json`，程序会优先复用已保存的链接继续抓详情。
+
+如果详情抓取过程中有少量 URL timeout，程序会把它们写到同目录下的 `failed-detail-urls.json`。之后可以只重抓这些失败详情：
+
+```bash
+node src/cli/index.js --mode=scrape --source=live --runDir=reports/YOUR_RUN_DIR --retry-failed-details
+```
 
 如果已经有 `raw-jobs.json`，就不需要重跑 scrape，直接跑：
 
