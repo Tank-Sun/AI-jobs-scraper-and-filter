@@ -11,6 +11,7 @@ const {
   getCollectedJobLinksPath,
   getFailedDetailUrlsPath,
   getValidJobCardIndexes,
+  inspectJobCards,
   goToNextResultsPage,
   hasLinkCollectionStalled,
   isLastPaginationPage,
@@ -122,6 +123,7 @@ test("isNoResultsPage detects empty LinkedIn results pages", async () => {
     '[data-view-name="job-search-job-card"]',
     'li[data-occludable-job-id]',
     '.jobs-search-results__list-item',
+    '.scaffold-layout__list-item',
   ]);
 
   const pageWithNoResults = {
@@ -146,7 +148,7 @@ test("isNoResultsPage detects empty LinkedIn results pages", async () => {
   const pageWithCards = {
     locator(selector) {
       if (cardSelectors.has(selector)) {
-        return { count: async () => (selector === '.jobs-search-results__list-item' ? 3 : 0) };
+        return { count: async () => (selector === '.scaffold-layout__list-item' ? 3 : 0) };
       }
       return { count: async () => 0 };
     },
@@ -567,15 +569,33 @@ test("extractJobIdFromTrackingScope decodes LinkedIn tracking buffers", () => {
 test("getValidJobCardIndexes keeps only cards with job signals", async () => {
   const locator = {
     evaluateAll: async (fn) => fn([
-      { textContent: '', querySelector: (selector) => selector === '[data-view-tracking-scope]' ? null : null },
-      { textContent: 'Senior Engineer', querySelector: () => null },
-      { textContent: '', querySelector: (selector) => selector === 'a[href]' ? {} : null },
-      { textContent: '', querySelector: (selector) => selector === '[data-view-tracking-scope]' ? {} : null },
+      { textContent: '', getAttribute: () => null, querySelector: (selector) => selector === '[data-view-tracking-scope]' ? null : null },
+      { textContent: 'Senior Engineer', getAttribute: () => null, querySelector: () => null },
+      { textContent: '', getAttribute: () => null, querySelector: (selector) => selector === 'a[href]' ? {} : null },
+      { textContent: '', getAttribute: () => null, querySelector: (selector) => selector === '[data-view-tracking-scope]' ? {} : null },
+      { textContent: '', getAttribute: (name) => name === 'data-job-id' ? '4388589355' : null, querySelector: () => null },
     ]),
   };
 
-  assert.deepEqual(await getValidJobCardIndexes({}, locator, 4), [1, 2, 3]);
+  assert.deepEqual(await getValidJobCardIndexes({}, locator, 5), [1, 2, 3, 4]);
   assert.deepEqual(await getValidJobCardIndexes({}, locator, 0), []);
+});
+
+test("inspectJobCards extracts direct job ids from data-job-id attributes", async () => {
+  const locator = {
+    evaluateAll: async (fn) => fn([
+      {
+        textContent: '',
+        getAttribute: (name) => name === 'data-job-id' ? '4388589355' : null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      },
+    ]),
+  };
+
+  assert.deepEqual(await inspectJobCards(locator), [
+    { index: 0, text: '', hasText: false, jobId: '4388589355' },
+  ]);
 });
 
 test("parseHeaderFromMainText splits location, posted time, applicant info, and employment type from main text", () => {

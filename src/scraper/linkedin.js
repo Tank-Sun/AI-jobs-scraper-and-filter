@@ -110,6 +110,7 @@ const JOB_CARD_SELECTORS = [
   '[data-view-name="job-search-job-card"]',
   'li[data-occludable-job-id]',
   '.jobs-search-results__list-item',
+  '.scaffold-layout__list-item',
 ];
 
 async function getJobCardsState(page) {
@@ -141,7 +142,8 @@ async function getValidJobCardIndexes(page, locator, count) {
       const hasTitle = text.length > 0;
       const hasHref = Boolean(element.querySelector('a[href]'));
       const hasTracking = Boolean(element.querySelector('[data-view-tracking-scope]'));
-      if (hasTitle || hasHref || hasTracking) {
+      const hasDataJobId = Boolean(element.getAttribute('data-job-id') || element.querySelector('[data-job-id]'));
+      if (hasTitle || hasHref || hasTracking || hasDataJobId) {
         indexes.push(index);
       }
     }
@@ -202,8 +204,13 @@ async function inspectJobCards(locator) {
     return elements.flatMap((element, index) => {
       const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
       const hasText = text.length > 0;
-      if (!hasText && !element.querySelector('a[href]') && !element.querySelector('[data-view-tracking-scope]')) {
+      const directDataJobId = element.getAttribute('data-job-id') || element.querySelector('[data-job-id]')?.getAttribute('data-job-id') || null;
+      if (!hasText && !directDataJobId && !element.querySelector('a[href]') && !element.querySelector('[data-view-tracking-scope]')) {
         return [];
+      }
+
+      if (directDataJobId) {
+        return [{ index, text, hasText, jobId: directDataJobId }];
       }
 
       const trackingValues = [...element.querySelectorAll('[data-view-tracking-scope]')]
@@ -283,12 +290,32 @@ async function ensureLinkedInJobsPage(page) {
   }
 }
 
-async function waitForJobCardsOrNoResults(page, timeoutMs = 8000) {
+async function waitForJobCardsOrNoResults(page, timeoutMs = 8000, settleMs = 1500) {
   const deadline = Date.now() + timeoutMs;
+  let bestSignalCount = 0;
+  let firstCardsAt = 0;
+  let lastImprovementAt = 0;
+
   while (Date.now() < deadline) {
-    const { count } = await getJobCardsState(page);
+    const { locator, count } = await getJobCardsState(page);
     if (count > 0) {
-      return;
+      if (!firstCardsAt) {
+        firstCardsAt = Date.now();
+      }
+
+      const signalCount = (await inspectJobCards(locator)).length;
+      if (signalCount > bestSignalCount) {
+        bestSignalCount = signalCount;
+        lastImprovementAt = Date.now();
+      }
+
+      if (signalCount >= count) {
+        return;
+      }
+
+      if (bestSignalCount > 0 && Date.now() - firstCardsAt >= settleMs && Date.now() - lastImprovementAt >= settleMs) {
+        return;
+      }
     }
 
     const mainText = await textOrEmpty(page.locator('main')).catch(() => '');
@@ -778,7 +805,17 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
     }
 
     const { locator: cards, count: cardCount } = await getJobCardsState(page);
-    const snapshotSignals = await inspectJobCards(cards);
+    let snapshotSignals = await inspectJobCards(cards);
+    if (cardCount > snapshotSignals.length) {
+      await autoScrollJobsList(page);
+      await page.waitForTimeout(500);
+      const { locator: hydratedCards } = await getJobCardsState(page);
+      const hydratedSignals = await inspectJobCards(hydratedCards);
+      if (hydratedSignals.length > snapshotSignals.length) {
+        console.log(`[scrape] Rehydrated job signals after scrolling: ${snapshotSignals.length} -> ${hydratedSignals.length}`);
+        snapshotSignals = hydratedSignals;
+      }
+    }
     const visibleCount = snapshotSignals.filter((signal) => signal.hasText).length;
 
     let addedThisPage = 0;
@@ -1323,6 +1360,7 @@ export const __testables = {
   getCollectedJobLinksPath,
   getFailedDetailUrlsPath,
   getValidJobCardIndexes,
+  inspectJobCards,
   goToNextResultsPage,
   hasLinkCollectionStalled,
   selectJobLinksForDetailScrape,
