@@ -100,10 +100,15 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   assert.match(prompt, /Missing employment type or visa policy should not by itself cause rejection or lower fit\./);
   assert.match(prompt, /Missing explicit mention of TypeScript, React, or Node\.js should be treated as uncertainty, not as an automatic rejection/);
   assert.match(prompt, /Do not reject merely because avoid-list technologies appear somewhere in the posting\./);
+  assert.match(prompt, /If company size is outside the preferred range but the role is otherwise strong, lower enthusiasm and lower company-quality\/growth signals instead of rejecting on that basis alone\./);
+  assert.match(prompt, /Do not use company size by itself as the deciding reason to reject a role when the title fit, responsibilities, and stack fit are otherwise strong\./);
   assert.match(prompt, /You must make the full shortlist-or-reject decision using only the candidate profile, requirements, and the job information below\./);
   assert.match(prompt, /full-stack roles first, then backend roles with a fitting stack, then frontend roles/i);
-  assert.match(prompt, /Treat 1-3 years of experience, Engineer I\/II, and Junior\/Intermediate labels as positive or at least valid signals for fit\./);
-  assert.match(prompt, /Treat explicit New Grad, Intern, internship-only, Staff, Principal, Distinguished, Director, Manager, and Member of Technical Staff labels as strong negative signals/i);
+  assert.match(prompt, /Treat 1-3 years of experience, Junior, Intermediate, Associate software engineering, and Engineer I\/II labels as strong positive seniority signals/i);
+  assert.match(prompt, /should often receive higher seniority scores than generic Senior roles that are less aligned/i);
+  assert.match(prompt, /Treat explicit New Grad, Fresh Graduate, Intern, internship-only, and co-op labels as strong negative signals/i);
+  assert.match(prompt, /Treat explicit Staff, Principal, Distinguished, Director, Manager, and Member of Technical Staff labels as strong negative signals/i);
+  assert.match(prompt, /reward well-aligned Junior\/Intermediate\/Associate software engineering\/Engineer I\/II roles aggressively; these can score higher than generic Senior roles/i);
   assert.match(prompt, /do not reject just because a role is backend or because it is not frontend-heavy/i);
   assert.match(prompt, /For backend roles, do not require an exact TypeScript\/Node\.js keyword match before keeping the role\./);
   assert.match(prompt, /Product\/backend roles that look plausibly aligned should usually stay in the pool for ranking/i);
