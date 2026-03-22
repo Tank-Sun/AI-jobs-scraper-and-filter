@@ -91,6 +91,16 @@ test("goToNextResultsPage prefers the visible Next button before falling back to
       return this._url;
     },
     locator(selector) {
+      if (selector === 'main') {
+        return {
+          count: async () => 1,
+          first() {
+            return {
+              textContent: async () => 'Page one jobs',
+            };
+          },
+        };
+      }
       assert.match(selector, /pagination-controls-next-button-visible/);
       return {
         first: () => ({
@@ -142,6 +152,62 @@ test("goToNextResultsPage falls back to a direct URL when the next button is una
   assert.deepEqual(calls, ['https://www.linkedin.com/jobs/search-results/?keywords=software+developer&start=25']);
 });
 
+
+test("goToNextResultsPage accepts changed page content even if the URL does not update immediately", async () => {
+  let clicked = 0;
+  let gotoCalls = 0;
+  let pageText = 'Page one jobs';
+  const waits = [];
+  const page = {
+    _url: 'https://www.linkedin.com/jobs/search-results/?keywords=software%20developer',
+    url() {
+      return this._url;
+    },
+    locator(selector) {
+      if (/pagination-controls-next-button-visible/.test(selector)) {
+        return {
+          first: () => ({
+            count: async () => 1,
+            click: async () => {
+              clicked += 1;
+              pageText = 'Page two jobs';
+            },
+          }),
+        };
+      }
+      if (selector === 'main') {
+        return {
+          count: async () => 1,
+          first() {
+            return {
+              textContent: async () => pageText,
+            };
+          },
+        };
+      }
+      return {
+        count: async () => 0,
+        first() {
+          return {
+            textContent: async () => '',
+          };
+        },
+      };
+    },
+    waitForTimeout: async (ms) => {
+      waits.push(ms);
+    },
+    goto: async () => {
+      gotoCalls += 1;
+    },
+  };
+
+  await goToNextResultsPage(page, 25);
+  assert.equal(clicked, 1);
+  assert.equal(gotoCalls, 0);
+  assert.ok(waits.length >= 1);
+});
+
 test("buildSearchResultsPageUrl removes currentJobId and advances start", () => {
   const nextPageUrl = buildSearchResultsPageUrl(
     "https://www.linkedin.com/jobs/search/?keywords=software%20engineer&currentJobId=4383817907&start=25",
@@ -172,24 +238,29 @@ test("isNoResultsPage detects empty LinkedIn results pages", async () => {
     '.scaffold-layout__list-item',
   ]);
 
-  const pageWithNoResults = {
-    locator(selector) {
-      if (cardSelectors.has(selector)) {
-        return { count: async () => 0 };
-      }
-      if (selector === 'main') {
-        return {
-          count: async () => 1,
-          first() {
-            return {
-              textContent: async () => 'No results found Try shortening or rephrasing your search.',
-            };
-          },
-        };
-      }
-      throw new Error(`Unexpected selector: ${selector}`);
-    },
-  };
+  function createEmptyResultsPage(text) {
+    return {
+      locator(selector) {
+        if (cardSelectors.has(selector)) {
+          return { count: async () => 0 };
+        }
+        if (selector === 'main') {
+          return {
+            count: async () => 1,
+            first() {
+              return {
+                textContent: async () => text,
+              };
+            },
+          };
+        }
+        throw new Error(`Unexpected selector: ${selector}`);
+      },
+    };
+  }
+
+  const pageWithNoResults = createEmptyResultsPage('No results found Try shortening or rephrasing your search.');
+  const pageWithNoMatchingJobs = createEmptyResultsPage('No matching jobs found Please broaden your filters.');
 
   const pageWithCards = {
     locator(selector) {
@@ -201,6 +272,7 @@ test("isNoResultsPage detects empty LinkedIn results pages", async () => {
   };
 
   assert.equal(await isNoResultsPage(pageWithNoResults), true);
+  assert.equal(await isNoResultsPage(pageWithNoMatchingJobs), true);
   assert.equal(await isNoResultsPage(pageWithCards), false);
 });
 

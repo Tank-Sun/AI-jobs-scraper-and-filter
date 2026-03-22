@@ -290,6 +290,14 @@ async function ensureLinkedInJobsPage(page) {
   }
 }
 
+function isLinkedInNoResultsText(text) {
+  return /\b(?:no results found|no matching jobs found|no matching results found)\b/i.test(normalizeWhitespace(text));
+}
+
+async function getJobsPageContentSignature(page) {
+  return normalizeWhitespace(await textOrEmpty(page.locator('main')).catch(() => '')).slice(0, 400);
+}
+
 async function waitForJobCardsOrNoResults(page, timeoutMs = 8000, settleMs = 1500) {
   const deadline = Date.now() + timeoutMs;
   let bestSignalCount = 0;
@@ -319,7 +327,7 @@ async function waitForJobCardsOrNoResults(page, timeoutMs = 8000, settleMs = 150
     }
 
     const mainText = await textOrEmpty(page.locator('main')).catch(() => '');
-    if (/no results found/i.test(mainText)) {
+    if (isLinkedInNoResultsText(mainText)) {
       return;
     }
 
@@ -358,19 +366,38 @@ function buildSearchResultsPageUrl(urlValue, start) {
 
 async function goToNextResultsPage(page, start) {
   const previousUrl = page.url();
+  const previousContentSignature = await getJobsPageContentSignature(page);
   const nextButton = page.locator('[data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next:not([disabled]), button[aria-label="Next"]:not([disabled]), button[aria-label="Next Page"]:not([disabled])').first();
 
   const nextCount = await nextButton.count().catch(() => 0);
   if (nextCount > 0) {
-    console.log(`[scrape] Moving to next page via Next button (start=${start})`);
-    await nextButton.click({ timeout: 3000 }).catch(() => {});
+    const clicked = await nextButton.click({ timeout: 3000 }).then(() => true).catch(() => false);
+    if (clicked) {
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        await page.waitForTimeout(250);
+        const currentUrl = page.url();
+        if (currentUrl !== previousUrl) {
+          console.log(`[scrape] Moving to next page via Next button (start=${start})`);
+          return;
+        }
 
-    const deadline = Date.now() + 10000;
-    while (Date.now() < deadline) {
-      await page.waitForTimeout(250);
-      const currentUrl = page.url();
-      if (currentUrl !== previousUrl) {
-        return;
+        const currentStart = Number(new URL(currentUrl).searchParams.get('start') ?? '0');
+        if (currentStart === start) {
+          console.log(`[scrape] Moving to next page via Next button (start=${start})`);
+          return;
+        }
+
+        const currentContentSignature = await getJobsPageContentSignature(page);
+        if (currentContentSignature && currentContentSignature !== previousContentSignature) {
+          console.log(`[scrape] Moving to next page via Next button (start=${start})`);
+          return;
+        }
+
+        if (isLinkedInNoResultsText(currentContentSignature)) {
+          console.log(`[scrape] Moving to next page via Next button (start=${start})`);
+          return;
+        }
       }
     }
   }
@@ -503,7 +530,7 @@ async function isNoResultsPage(page) {
   }
 
   const mainText = await textOrEmpty(page.locator('main')).catch(() => '');
-  return /no results found/i.test(mainText);
+  return isLinkedInNoResultsText(mainText);
 }
 
 function parseTotalResultsCount(text) {
