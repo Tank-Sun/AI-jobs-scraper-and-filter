@@ -327,10 +327,19 @@ async function waitForJobCardsOrNoResults(page, timeoutMs = 8000, settleMs = 150
   }
 }
 
-async function autoScrollJobsList(page) {
-  const { locator } = await getJobCardsState(page);
-  for (let index = 0; index < 20; index += 1) {
-    await locator.nth(Math.max(0, index - 1)).scrollIntoViewIfNeeded().catch(() => {});
+async function autoScrollJobsList(page, options = {}) {
+  const {
+    minPasses = 20,
+    targetCount = 0,
+  } = options;
+
+  const initialState = await getJobCardsState(page);
+  const totalPasses = Math.max(minPasses, targetCount, initialState.count);
+
+  for (let index = 0; index < totalPasses; index += 1) {
+    const { locator, count } = await getJobCardsState(page);
+    const lastKnownIndex = Math.max(0, Math.min(index, count - 1));
+    await locator.nth(lastKnownIndex).scrollIntoViewIfNeeded().catch(() => {});
     await page.mouse.wheel(0, 1800);
     await page.waitForTimeout(450);
   }
@@ -807,7 +816,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
     const { locator: cards, count: cardCount } = await getJobCardsState(page);
     let snapshotSignals = await inspectJobCards(cards);
     if (cardCount > snapshotSignals.length) {
-      await autoScrollJobsList(page);
+      await autoScrollJobsList(page, { targetCount: cardCount });
       await page.waitForTimeout(500);
       const { locator: hydratedCards } = await getJobCardsState(page);
       const hydratedSignals = await inspectJobCards(hydratedCards);
@@ -1361,6 +1370,7 @@ export const __testables = {
   getFailedDetailUrlsPath,
   getValidJobCardIndexes,
   inspectJobCards,
+  autoScrollJobsList,
   goToNextResultsPage,
   hasLinkCollectionStalled,
   selectJobLinksForDetailScrape,

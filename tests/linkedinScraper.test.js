@@ -12,6 +12,7 @@ const {
   getFailedDetailUrlsPath,
   getValidJobCardIndexes,
   inspectJobCards,
+  autoScrollJobsList,
   goToNextResultsPage,
   hasLinkCollectionStalled,
   isLastPaginationPage,
@@ -35,6 +36,51 @@ const {
   writeCollectedJobLinks,
   writeFailedDetailUrls,
 } = __testables;
+
+test("autoScrollJobsList uses at least the detected card count as scroll passes", async () => {
+  let scrollCalls = 0;
+  let wheelCalls = 0;
+  let waits = 0;
+  const page = {
+    mouse: {
+      wheel: async () => {
+        wheelCalls += 1;
+      },
+    },
+    waitForTimeout: async () => {
+      waits += 1;
+    },
+    locator(selector) {
+      if (selector !== '.scaffold-layout__list-item') {
+        return {
+          count: async () => 0,
+          nth() {
+            return {
+              scrollIntoViewIfNeeded: async () => {},
+            };
+          },
+        };
+      }
+
+      return {
+        count: async () => 25,
+        nth(index) {
+          return {
+            scrollIntoViewIfNeeded: async () => {
+              scrollCalls += 1;
+              assert.ok(index >= 0);
+            },
+          };
+        },
+      };
+    },
+  };
+
+  await autoScrollJobsList(page, { targetCount: 25 });
+  assert.equal(scrollCalls, 25);
+  assert.equal(wheelCalls, 25);
+  assert.equal(waits, 25);
+});
 
 test("goToNextResultsPage prefers the visible Next button before falling back to a direct URL", async () => {
   let clicked = 0;
