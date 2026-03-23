@@ -153,59 +153,70 @@ test("goToNextResultsPage falls back to a direct URL when the next button is una
 });
 
 
-test("goToNextResultsPage accepts changed page content even if the URL does not update immediately", async () => {
+test("goToNextResultsPage falls back to a direct URL when page content changes but the URL does not", async () => {
   let clicked = 0;
-  let gotoCalls = 0;
-  let pageText = 'Page one jobs';
   const waits = [];
-  const page = {
-    _url: 'https://www.linkedin.com/jobs/search-results/?keywords=software%20developer',
-    url() {
-      return this._url;
-    },
-    locator(selector) {
-      if (/pagination-controls-next-button-visible/.test(selector)) {
-        return {
-          first: () => ({
+  let now = 0;
+  const originalNow = Date.now;
+  Date.now = () => {
+    now += 5000;
+    return now;
+  };
+
+  try {
+    const calls = [];
+    let pageText = 'Page one jobs';
+    const page = {
+      _url: 'https://www.linkedin.com/jobs/search-results/?keywords=software%20developer',
+      url() {
+        return this._url;
+      },
+      locator(selector) {
+        if (/pagination-controls-next-button-visible/.test(selector)) {
+          return {
+            first: () => ({
+              count: async () => 1,
+              click: async () => {
+                clicked += 1;
+                pageText = 'Page two jobs';
+              },
+            }),
+          };
+        }
+        if (selector === 'main') {
+          return {
             count: async () => 1,
-            click: async () => {
-              clicked += 1;
-              pageText = 'Page two jobs';
+            first() {
+              return {
+                textContent: async () => pageText,
+              };
             },
-          }),
-        };
-      }
-      if (selector === 'main') {
+          };
+        }
         return {
-          count: async () => 1,
+          count: async () => 0,
           first() {
             return {
-              textContent: async () => pageText,
+              textContent: async () => '',
             };
           },
         };
-      }
-      return {
-        count: async () => 0,
-        first() {
-          return {
-            textContent: async () => '',
-          };
-        },
-      };
-    },
-    waitForTimeout: async (ms) => {
-      waits.push(ms);
-    },
-    goto: async () => {
-      gotoCalls += 1;
-    },
-  };
+      },
+      waitForTimeout: async (ms) => {
+        waits.push(ms);
+      },
+      goto: async (url) => {
+        calls.push(url);
+      },
+    };
 
-  await goToNextResultsPage(page, 25);
-  assert.equal(clicked, 1);
-  assert.equal(gotoCalls, 0);
-  assert.ok(waits.length >= 1);
+    await goToNextResultsPage(page, 25);
+    assert.equal(clicked, 1);
+    assert.deepEqual(calls, ['https://www.linkedin.com/jobs/search-results/?keywords=software+developer&start=25']);
+    assert.ok(waits.length >= 1);
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test("buildSearchResultsPageUrl removes currentJobId and advances start", () => {
