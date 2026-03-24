@@ -108,18 +108,29 @@ function firstNonEmpty(...values) {
 const JOB_CARD_SELECTORS = [
   'main div[data-display-contents="true"] > div[role="button"]',
   '[data-view-name="job-search-job-card"]',
+  '[data-view-name="job-card"]',
   'li[data-occludable-job-id]',
   '.jobs-search-results__list-item',
   '.scaffold-layout__list-item',
 ];
 
 async function getJobCardsState(page) {
+  let bestState = null;
+
   for (const selector of JOB_CARD_SELECTORS) {
     const locator = page.locator(selector);
     const count = await locator.count().catch(() => 0);
-    if (count > 0) {
-      return { selector, locator, count };
+    if (count <= 0) {
+      continue;
     }
+
+    if (!bestState || count > bestState.count) {
+      bestState = { selector, locator, count };
+    }
+  }
+
+  if (bestState) {
+    return bestState;
   }
 
   const fallbackSelector = JOB_CARD_SELECTORS[0];
@@ -329,6 +340,23 @@ async function waitForJobCardsOrNoResults(page, timeoutMs = 8000, settleMs = 150
 
     await page.waitForTimeout(250);
   }
+}
+
+async function getInitialJobCardsState(page) {
+  await waitForJobCardsOrNoResults(page);
+  let initialCards = await getJobCardsState(page);
+
+  if (initialCards.count === 0) {
+    await page.waitForTimeout(2500);
+    await waitForJobCardsOrNoResults(page, 12000, 2500);
+    const retriedCards = await getJobCardsState(page);
+    if (retriedCards.count > initialCards.count) {
+      console.log(`[scrape] Recovered initial job cards after retry: ${initialCards.count} -> ${retriedCards.count}`);
+    }
+    initialCards = retriedCards;
+  }
+
+  return initialCards;
 }
 
 async function autoScrollJobsList(page, options = {}) {
@@ -1272,8 +1300,7 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath, retryFailed
 
     const searchPage = await findJobsPage(context);
     await ensureLinkedInJobsPage(searchPage);
-    await waitForJobCardsOrNoResults(searchPage);
-    const initialCards = await getJobCardsState(searchPage);
+    const initialCards = await getInitialJobCardsState(searchPage);
     console.log(`[scrape] Using jobs page: ${searchPage.url()}`);
     console.log(`[scrape] Detected ${initialCards.count} job cards with selector ${initialCards.selector}`);
     const existingJobLinks = await readCollectedJobLinks(rawJobsPath);
@@ -1385,6 +1412,7 @@ export const __testables = {
   buildSignalDiagnosticKey,
   getCollectedJobLinksPath,
   getFailedDetailUrlsPath,
+  getJobCardsState,
   getValidJobCardIndexes,
   inspectJobCards,
   autoScrollJobsList,

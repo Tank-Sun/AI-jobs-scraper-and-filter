@@ -10,6 +10,7 @@ const {
   buildSearchResultsPageUrl,
   getCollectedJobLinksPath,
   getFailedDetailUrlsPath,
+  getJobCardsState,
   getValidJobCardIndexes,
   inspectJobCards,
   autoScrollJobsList,
@@ -36,6 +37,39 @@ const {
   writeCollectedJobLinks,
   writeFailedDetailUrls,
 } = __testables;
+
+test("getJobCardsState recognizes the semantic job-card selector", async () => {
+  const page = {
+    locator(selector) {
+      return {
+        count: async () => (selector === '[data-view-name="job-card"]' ? 12 : 0),
+      };
+    },
+  };
+
+  const state = await getJobCardsState(page);
+  assert.equal(state.selector, '[data-view-name="job-card"]');
+  assert.equal(state.count, 12);
+});
+
+
+test("getJobCardsState prefers the selector with the highest card count", async () => {
+  const counts = new Map([
+    ['[data-view-name="job-card"]', 8],
+    ['.scaffold-layout__list-item', 25],
+  ]);
+  const page = {
+    locator(selector) {
+      return {
+        count: async () => counts.get(selector) ?? 0,
+      };
+    },
+  };
+
+  const state = await getJobCardsState(page);
+  assert.equal(state.selector, '.scaffold-layout__list-item');
+  assert.equal(state.count, 25);
+});
 
 test("autoScrollJobsList uses at least the detected card count as scroll passes", async () => {
   let scrollCalls = 0;
@@ -244,6 +278,7 @@ test("isNoResultsPage detects empty LinkedIn results pages", async () => {
   const cardSelectors = new Set([
     'main div[data-display-contents="true"] > div[role="button"]',
     '[data-view-name="job-search-job-card"]',
+    '[data-view-name="job-card"]',
     'li[data-occludable-job-id]',
     '.jobs-search-results__list-item',
     '.scaffold-layout__list-item',
