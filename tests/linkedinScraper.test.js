@@ -11,6 +11,7 @@ const {
   getCollectedJobLinksPath,
   getFailedDetailUrlsPath,
   getJobCardsState,
+  getInitialJobCardsState,
   getValidJobCardIndexes,
   inspectJobCards,
   autoScrollJobsList,
@@ -69,6 +70,105 @@ test("getJobCardsState prefers the selector with the highest card count", async 
   const state = await getJobCardsState(page);
   assert.equal(state.selector, '.scaffold-layout__list-item');
   assert.equal(state.count, 25);
+});
+
+
+test("getInitialJobCardsState reloads once when selectors stay empty through the initial waits", async () => {
+  let afterReload = false;
+  let reloads = 0;
+  let waits = 0;
+  let now = 0;
+  const originalNow = Date.now;
+  Date.now = () => {
+    now += 3000;
+    return now;
+  };
+
+  try {
+    const page = {
+      async reload() {
+        reloads += 1;
+        afterReload = true;
+      },
+      async waitForTimeout() {
+        waits += 1;
+      },
+      locator(selector) {
+        if (selector === '.scaffold-layout__list-item') {
+          return {
+            count: async () => (afterReload ? 26 : 0),
+            evaluateAll: async () => (afterReload
+              ? Array.from({ length: 26 }, (_, index) => ({ index, text: `Job ${index}`, hasText: true, jobId: `${1000 + index}` }))
+              : []),
+          };
+        }
+        if (selector === 'main') {
+          return {
+            count: async () => 1,
+            first() {
+              return {
+                textContent: async () => 'Software developer jobs in Alberta, Canada',
+              };
+            },
+          };
+        }
+        return {
+          count: async () => 0,
+          evaluateAll: async () => [],
+        };
+      },
+    };
+
+    const state = await getInitialJobCardsState(page);
+    assert.equal(reloads, 1);
+    assert.ok(waits >= 1);
+    assert.equal(state.selector, '.scaffold-layout__list-item');
+    assert.equal(state.count, 26);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+
+test("getInitialJobCardsState does not reload a true no-results page", async () => {
+  let reloads = 0;
+  let now = 0;
+  const originalNow = Date.now;
+  Date.now = () => {
+    now += 3000;
+    return now;
+  };
+
+  try {
+    const page = {
+      async reload() {
+        reloads += 1;
+      },
+      async waitForTimeout() {},
+      locator(selector) {
+        if (selector === 'main') {
+          return {
+            count: async () => 1,
+            first() {
+              return {
+                textContent: async () => 'No matching jobs found. Please broaden your filters.',
+              };
+            },
+          };
+        }
+        return {
+          count: async () => 0,
+          evaluateAll: async () => [],
+        };
+      },
+    };
+
+    const state = await getInitialJobCardsState(page);
+    assert.equal(reloads, 0);
+    assert.equal(state.count, 0);
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test("autoScrollJobsList uses at least the detected card count as scroll passes", async () => {

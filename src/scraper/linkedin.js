@@ -352,8 +352,23 @@ async function getInitialJobCardsState(page) {
     const retriedCards = await getJobCardsState(page);
     if (retriedCards.count > initialCards.count) {
       console.log(`[scrape] Recovered initial job cards after retry: ${initialCards.count} -> ${retriedCards.count}`);
+      initialCards = retriedCards;
+    } else {
+      initialCards = retriedCards;
     }
-    initialCards = retriedCards;
+  }
+
+  if (initialCards.count === 0 && !(await isNoResultsPage(page))) {
+    console.log('[scrape] No job-card selectors matched after initial waits; reloading the current jobs page once');
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+    await waitForJobCardsOrNoResults(page, 12000, 2500);
+    const reloadedCards = await getJobCardsState(page);
+    if (reloadedCards.count > initialCards.count) {
+      console.log(`[scrape] Recovered initial job cards after reload: ${initialCards.count} -> ${reloadedCards.count}`);
+    } else {
+      console.log('[scrape] Initial reload still found no matching job-card selectors');
+    }
+    initialCards = reloadedCards;
   }
 
   return initialCards;
@@ -1302,7 +1317,11 @@ async function scrapeJobsViaPlaywright({ cdpUrl, limit, rawJobsPath, retryFailed
     await ensureLinkedInJobsPage(searchPage);
     const initialCards = await getInitialJobCardsState(searchPage);
     console.log(`[scrape] Using jobs page: ${searchPage.url()}`);
-    console.log(`[scrape] Detected ${initialCards.count} job cards with selector ${initialCards.selector}`);
+    if (initialCards.count > 0) {
+      console.log(`[scrape] Detected ${initialCards.count} job cards with selector ${initialCards.selector}`);
+    } else {
+      console.log('[scrape] Detected 0 job cards; no job-card selectors matched after initial recovery');
+    }
     const existingJobLinks = await readCollectedJobLinks(rawJobsPath);
     const failedDetailUrls = await readFailedDetailUrls(rawJobsPath);
     if (existingJobLinks.length > 0) {
@@ -1413,6 +1432,7 @@ export const __testables = {
   getCollectedJobLinksPath,
   getFailedDetailUrlsPath,
   getJobCardsState,
+  getInitialJobCardsState,
   getValidJobCardIndexes,
   inspectJobCards,
   autoScrollJobsList,
