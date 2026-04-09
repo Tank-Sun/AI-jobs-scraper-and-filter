@@ -6,7 +6,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_SCORE_CONCURRENCY = 4;
-const SCORING_SIGNATURE_VERSION = '2026-03-16-ai-prompt-recalibrated-v16';
+const SCORING_SIGNATURE_VERSION = '2026-04-09-heuristic-fallback-aligned-v17';
 
 const PRODUCT_ENGINEERING_TERMS = [
   'product',
@@ -277,33 +277,40 @@ function skillCoverageScore(job, requirements, resume) {
 
 function seniorityScore(job, requirements) {
   const normalizedTitle = (job.title ?? '').toLowerCase();
-  const explicitlyJunior = ['intern', 'internship', 'junior', 'new grad', 'new graduate', 'entry level', 'entry-level']
+  const explicitlyEntryLevel = ['intern', 'internship', 'new grad', 'new graduate', 'fresh graduate', 'entry level', 'entry-level', 'co-op', 'co op', 'coop']
     .some((term) => normalizedTitle.includes(term));
-  if (explicitlyJunior) {
-    return 20;
+  if (explicitlyEntryLevel) {
+    return 8;
   }
 
-  const explicitlyTooSenior = ['staff', 'principal', 'distinguished', 'director', 'manager', 'lead architect']
+  const explicitlyTooSenior = ['staff', 'principal', 'distinguished', 'director', 'manager', 'lead architect', 'member of technical staff']
     .some((term) => normalizedTitle.includes(term));
   if (explicitlyTooSenior) {
-    return normalizedTitle.includes('staff') || normalizedTitle.includes('principal') ? 35 : 25;
+    return normalizedTitle.includes('staff') || normalizedTitle.includes('principal') || normalizedTitle.includes('distinguished') || normalizedTitle.includes('member of technical staff')
+      ? 18
+      : 24;
   }
 
-  const midPreferredLevels = ['mid', 'mid-level', 'intermediate', 'software engineer ii'];
+  const midPreferredLevels = ['mid', 'mid-level', 'intermediate', 'software engineer ii', 'engineer ii'];
   if (midPreferredLevels.some((term) => normalizedTitle.includes(term))) {
-    return 90;
+    return 94;
+  }
+
+  const earlyCareerPreferredLevels = ['associate', 'junior', 'software engineer i', 'engineer i'];
+  if (earlyCareerPreferredLevels.some((term) => normalizedTitle.includes(term))) {
+    return 88;
   }
 
   const seniorPreferredLevels = ['senior', 'senior software engineer', 'software engineer iii'];
   if (seniorPreferredLevels.some((term) => normalizedTitle.includes(term))) {
-    return 82;
+    return 72;
   }
 
   if (requirements.experience_level.some((level) => normalizedTitle.includes(level.replace('-level', '').trim()))) {
-    return 84;
+    return 76;
   }
 
-  return 68;
+  return 70;
 }
 
 function hasGenericAiSignal(job) {
@@ -547,6 +554,59 @@ function titleAlignmentScore(job, requirements) {
   return clampScore(score);
 }
 
+function determineHeuristicDecision(job, breakdown, totalScore) {
+  const normalizedTitle = (job.title ?? '').toLowerCase();
+  const explicitlyEntryLevel = ['new grad', 'new graduate', 'fresh graduate', 'intern', 'internship', 'co-op', 'co op', 'coop']
+    .some((term) => normalizedTitle.includes(term));
+  if (explicitlyEntryLevel) {
+    return {
+      decision: 'reject',
+      whyRecommended: 'Heuristic fallback rejected this role because it is explicitly a new grad, intern, or co-op posting.',
+      rejectReason: 'Heuristic fallback rejected this role because it is explicitly new grad, intern, or co-op level.',
+    };
+  }
+
+  const explicitlyTooSenior = ['staff', 'principal', 'distinguished', 'director', 'manager', 'member of technical staff']
+    .some((term) => normalizedTitle.includes(term));
+
+  const titleVeryWeak = breakdown.title < 15;
+  const titleWeak = breakdown.title < 25;
+  const skillsVeryWeak = breakdown.skills < 15;
+  const skillsWeak = breakdown.skills < 30;
+  const responsibilitiesVeryWeak = breakdown.responsibilities < 25;
+  const responsibilitiesWeak = breakdown.responsibilities < 40;
+  const clearCoreMismatch =
+    (titleWeak && skillsWeak && responsibilitiesWeak) ||
+    (titleVeryWeak && responsibilitiesWeak) ||
+    (titleVeryWeak && skillsVeryWeak) ||
+    (skillsVeryWeak && responsibilitiesVeryWeak);
+
+  if (explicitlyTooSenior && breakdown.title < 55 && (totalScore < 70 || responsibilitiesWeak)) {
+    return {
+      decision: 'reject',
+      whyRecommended: 'Heuristic fallback rejected this role because the title looks clearly over-level for the target profile.',
+      rejectReason: 'Heuristic fallback rejected this role because the title is clearly over-level for the target profile.',
+    };
+  }
+
+  if (clearCoreMismatch) {
+    return {
+      decision: 'reject',
+      whyRecommended: 'Heuristic fallback rejected this role because the title, skills, and day-to-day work all looked clearly off-target.',
+      rejectReason: 'Heuristic fallback found a clear mismatch across title, skills, and responsibilities.',
+    };
+  }
+
+  return {
+    decision: 'shortlist',
+    whyRecommended:
+      totalScore >= 60
+        ? 'Heuristic fallback kept this role because it matched the candidate profile well enough to stay on the shortlist.'
+        : 'Heuristic fallback kept this role because it still looks plausibly worth manual review despite some weaker scores.',
+    rejectReason: '',
+  };
+}
+
 function heuristicScore(job, requirements, resume) {
   const weights = requirements.weights;
   const growthBase = (job.description ?? '').toLowerCase().includes('growth') ? 80 : 45;
@@ -565,16 +625,14 @@ function heuristicScore(job, requirements, resume) {
   };
 
   const totalScore = calculateWeightedTotalScore(breakdown, weights);
+  const decisionResult = determineHeuristicDecision(job, breakdown, totalScore);
 
   return {
-    decision: totalScore >= 60 ? 'shortlist' : 'reject',
+    decision: decisionResult.decision,
     totalScore,
     breakdown,
-    whyRecommended:
-      totalScore >= 60
-        ? 'Heuristic fallback kept this role because it passed deterministic filters and matched the resume reasonably well.'
-        : 'Heuristic fallback rejected this role because its overall fit score was too low.',
-    rejectReason: totalScore >= 60 ? '' : 'Heuristic fallback score below shortlist threshold.',
+    whyRecommended: decisionResult.whyRecommended,
+    rejectReason: decisionResult.rejectReason,
     gaps: requirements.nice_to_have_skills.filter((skill) => !(job.description ?? '').toLowerCase().includes(skill)).slice(0, 5),
     scoringSource: 'heuristic',
   };
@@ -796,6 +854,10 @@ function toAiRejectionReasons(result) {
     { field: 'aiDecision', message: result.rejectReason || 'AI rejected this role as an overall mismatch.' },
   ];
 
+  if (result.scoringFailureMessage) {
+    reasons.push({ field: 'scoringFallback', message: `Gemini scoring failed and heuristic fallback was used: ${result.scoringFailureMessage}` });
+  }
+
   const lowestBreakdowns = Object.entries(result.breakdown ?? {})
     .sort((left, right) => left[1] - right[1])
     .slice(0, 3);
@@ -937,14 +999,16 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
   } catch (error) {
     try {
       const fallback = heuristicScore(job, requirements, resume);
+      const scoringFailureMessage = error instanceof Error ? error.message : String(error);
       const enriched = {
         ...job,
         ...fallback,
-        scoringFailureMessage: error instanceof Error ? error.message : String(error),
+        scoringFailureMessage,
       };
 
       const scoredFallback = {
         ...fallback,
+        scoringFailureMessage,
         modelDecision: fallback.decision,
         decision: fallback.decision === 'shortlist' ? 'scored' : 'reject',
       };
@@ -954,7 +1018,7 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
       };
 
       const fallbackReasons = scoredFallback.decision === 'reject'
-        ? toAiRejectionReasons(fallback)
+        ? toAiRejectionReasons(scoredFallback)
         : [];
 
       cache.entries[cacheKey] = buildCacheEntry({
@@ -1072,9 +1136,11 @@ export const __testables = {
   hasDevexSignal,
   hasStrongProductSignal,
   heuristicScore,
+  determineHeuristicDecision,
   mapWithConcurrency,
   normalizeGeminiResult,
   normalizeGeminiScoreValue,
   resolveScoreConcurrency,
   riskScore,
+  toAiRejectionReasons,
 };

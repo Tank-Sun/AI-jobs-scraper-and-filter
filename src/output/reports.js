@@ -113,7 +113,7 @@ function toShortlistMarkdown(shortlist, runLabel) {
         `Seniority: ${job.breakdown.seniority}`,
         `Risk: ${job.breakdown.risk}`,
       ].join(' | ');
-      return `## ${index + 1}. ${job.title} @ ${job.company}\n\n- Location: ${job.location}\n- Scores: ${reasons}\n- Why: ${job.whyRecommended}\n- AI Signals: ${(job.aiSignals ?? []).join(', ') || 'None'}\n- Gaps: ${(job.gaps ?? []).join(', ') || 'None'}\n- URL: ${job.jobUrl}\n`;
+      return `## ${index + 1}. ${job.title} @ ${job.company}\n\n- Location: ${job.location}\n- Scores: ${reasons}\n- Why: ${job.whyRecommended}\n${job.scoringFailureMessage ? `- Scoring fallback: ${job.scoringFailureMessage}\n` : ''}- AI Signals: ${(job.aiSignals ?? []).join(', ') || 'None'}\n- Gaps: ${(job.gaps ?? []).join(', ') || 'None'}\n- URL: ${job.jobUrl}\n`;
     })
     .join('\n');
 
@@ -122,7 +122,7 @@ function toShortlistMarkdown(shortlist, runLabel) {
 
 function toRejectedMarkdown(rejected, runLabel) {
   const body = rejected
-    .map((job) => `## ${job.title} @ ${job.company}\n\n- URL: ${job.jobUrl}\n- Reasons: ${job.reasons.map((reason) => `${reason.field}: ${reason.message}`).join('; ')}\n`)
+    .map((job) => `## ${job.title} @ ${job.company}\n\n- URL: ${job.jobUrl}\n${job.scoringFailureMessage ? `- Scoring fallback: ${job.scoringFailureMessage}\n` : ''}- Reasons: ${job.reasons.map((reason) => `${reason.field}: ${reason.message}`).join('; ')}\n`)
     .join('\n');
 
   return `# Rejected\n\n- Generated: ${runLabel}\n\n${body}`;

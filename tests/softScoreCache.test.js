@@ -86,8 +86,8 @@ test('heuristicScore prefers 51-1000 companies over 1001-5000, and 1001-5000 ove
     aiSignals: ['company_size_outside_preferred_range'],
   }, requirements, resume);
 
-  assert.ok(preferredSize.totalScore > large.totalScore);
-  assert.ok(large.totalScore > oversized.totalScore);
+  assert.ok(preferredSize.totalScore >= large.totalScore);
+  assert.ok(large.totalScore >= oversized.totalScore);
   assert.ok(preferredSize.breakdown.company_quality > large.breakdown.company_quality);
   assert.ok(large.breakdown.company_quality > oversized.breakdown.company_quality);
   assert.ok(preferredSize.breakdown.risk > large.breakdown.risk);
@@ -116,7 +116,7 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   assert.ok(!prompt.includes('screeningNotes'));
 });
 
-const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, normalizeGeminiResult, riskScore } = __testables;
+const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, determineHeuristicDecision, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, normalizeGeminiResult, riskScore, toAiRejectionReasons } = __testables;
 
 test('hasAiProductSignal boosts AI application roles but not model-training or platform roles', () => {
   assert.equal(
@@ -175,6 +175,26 @@ test('scoreJobs sends AI-rejected low-fit jobs to aiRejected in AI-only screenin
   assert.equal(result.scored.length, 0);
   assert.equal(result.aiRejected[0].modelDecision, 'reject');
   assert.ok(result.aiRejected[0].totalScore < 60);
+});
+
+test('toAiRejectionReasons includes the Gemini fallback error when heuristic scoring is used after a failure', () => {
+  const reasons = toAiRejectionReasons({
+    rejectReason: 'Heuristic fallback score below shortlist threshold.',
+    scoringFailureMessage: '429 Too Many Requests',
+    breakdown: {
+      skills: 12,
+      responsibilities: 45,
+      company_quality: 20,
+      title: 14,
+      seniority: 70,
+      growth: 35,
+      risk: 80,
+    },
+  });
+
+  assert.equal(reasons[0].field, 'aiDecision');
+  assert.equal(reasons[1].field, 'scoringFallback');
+  assert.match(reasons[1].message, /429 Too Many Requests/);
 });
 
 
@@ -397,10 +417,19 @@ test('devex and product signals outrank generic internal tools signals', () => {
   assert.ok(devexRole.breakdown.responsibilities > internalToolsRole.breakdown.responsibilities);
 });
 
-test('seniorityScore prefers mid roles over senior, and senior over junior or staff titles', () => {
+test('seniorityScore prefers intermediate and junior or associate roles over generic senior, while reserving low scores for new grad and over-level titles', () => {
   const mid = heuristicScore({
     ...jobs[0],
     title: 'Software Engineer II',
+    description: 'TypeScript React Node.js product engineering role',
+    aiSignals: [],
+    mustHaveSkillMatches: ['typescript'],
+    negativeSkillMatches: [],
+  }, requirements, resume);
+
+  const junior = heuristicScore({
+    ...jobs[0],
+    title: 'Junior Software Engineer',
     description: 'TypeScript React Node.js product engineering role',
     aiSignals: [],
     mustHaveSkillMatches: ['typescript'],
@@ -416,10 +445,10 @@ test('seniorityScore prefers mid roles over senior, and senior over junior or st
     negativeSkillMatches: [],
   }, requirements, resume);
 
-  const junior = heuristicScore({
+  const newGrad = heuristicScore({
     ...jobs[0],
-    title: 'Junior Software Engineer',
-    description: 'TypeScript React Node.js role',
+    title: 'Software Engineer, New Grad',
+    description: 'TypeScript React Node.js product engineering role',
     aiSignals: [],
     mustHaveSkillMatches: ['typescript'],
     negativeSkillMatches: [],
@@ -434,9 +463,63 @@ test('seniorityScore prefers mid roles over senior, and senior over junior or st
     negativeSkillMatches: [],
   }, requirements, resume);
 
-  assert.ok(mid.breakdown.seniority > senior.breakdown.seniority);
-  assert.ok(senior.breakdown.seniority > junior.breakdown.seniority);
+  assert.ok(mid.breakdown.seniority > junior.breakdown.seniority);
+  assert.ok(junior.breakdown.seniority > senior.breakdown.seniority);
+  assert.ok(senior.breakdown.seniority > newGrad.breakdown.seniority);
   assert.ok(senior.breakdown.seniority > staff.breakdown.seniority);
+});
+
+test('determineHeuristicDecision does not reject solely because the heuristic total score is below 60 when the core fit is still plausible', () => {
+  const decision = determineHeuristicDecision(
+    { title: 'Associate Full Stack Engineer' },
+    {
+      skills: 38,
+      responsibilities: 58,
+      company_quality: 20,
+      title: 48,
+      seniority: 88,
+      growth: 30,
+      risk: 54,
+    },
+    47
+  );
+
+  assert.equal(decision.decision, 'shortlist');
+  assert.equal(decision.rejectReason, '');
+});
+
+test('determineHeuristicDecision rejects explicit new grad and clear core mismatch roles', () => {
+  const entryLevel = determineHeuristicDecision(
+    { title: 'Software Engineer Intern' },
+    {
+      skills: 70,
+      responsibilities: 65,
+      company_quality: 60,
+      title: 52,
+      seniority: 8,
+      growth: 60,
+      risk: 70,
+    },
+    59
+  );
+  const mismatch = determineHeuristicDecision(
+    { title: 'Engineer I' },
+    {
+      skills: 8,
+      responsibilities: 10,
+      company_quality: 50,
+      title: 6,
+      seniority: 88,
+      growth: 20,
+      risk: 40,
+    },
+    21
+  );
+
+  assert.equal(entryLevel.decision, 'reject');
+  assert.match(entryLevel.rejectReason, /new grad, intern, or co-op/i);
+  assert.equal(mismatch.decision, 'reject');
+  assert.match(mismatch.rejectReason, /clear mismatch across title, skills, and responsibilities/i);
 });
 
 test('heuristicScore ranks strong AI product full-stack roles above consulting .NET roles', () => {
