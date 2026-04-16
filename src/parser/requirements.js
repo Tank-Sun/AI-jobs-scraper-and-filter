@@ -20,6 +20,7 @@ const listKeys = new Set([
   'nice_to_have_skills',
   'industry_preferences',
   'negative_skills',
+  'excluded_companies',
   'red_flags',
 ]);
 

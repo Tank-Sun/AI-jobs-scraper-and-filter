@@ -16,6 +16,39 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..', '..');
 const DEFAULT_REPORT_LIMIT = 30;
 
+function normalizeCompanyNameForExclusion(value) {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function splitExcludedCompanies(jobs, requirements) {
+  const excluded = (requirements.excluded_companies ?? []).map(normalizeCompanyNameForExclusion).filter(Boolean);
+  if (excluded.length === 0) {
+    return { accepted: jobs, rejected: [] };
+  }
+
+  const accepted = [];
+  const rejected = [];
+
+  for (const job of jobs) {
+    const normalizedCompany = normalizeCompanyNameForExclusion(job.company);
+    const matched = excluded.find((company) => normalizedCompany.includes(company));
+    if (!matched) {
+      accepted.push(job);
+      continue;
+    }
+
+    rejected.push({
+      ...job,
+      reasons: [{ field: 'company', message: `Company ${job.company} is on the excluded companies list` }],
+    });
+  }
+
+  return { accepted, rejected };
+}
+
 function isTrueFlag(value) {
   return value === 'true';
 }
@@ -153,10 +186,11 @@ async function runScorePhase({ args, requirements, resume, normalization, env })
   const generatedAt = new Date().toISOString();
   const jobs = await readJsonFile(rawJobsPath);
   const dedupeResult = dedupeJobs(jobs, normalization);
+  const exclusionResult = splitExcludedCompanies(dedupeResult.uniqueJobs, requirements);
   // Default runtime path: AI-first screening. Deterministic filtering remains in
-  // src/filter/hardFilter.js only as a legacy/backup mode and is not applied here.
+  // src/filter/hardFilter.js only as a legacy/backup mode and does not run here.
   const scoringResult = await scoreJobs({
-    jobs: dedupeResult.uniqueJobs,
+    jobs: exclusionResult.accepted,
     requirements,
     resume,
     env,
@@ -167,15 +201,15 @@ async function runScorePhase({ args, requirements, resume, normalization, env })
   const shortlist = [...scoringResult.scored]
     .sort((left, right) => right.totalScore - left.totalScore)
     .slice(0, shortlistLimit);
-  const allRejected = [...scoringResult.aiRejected];
+  const allRejected = [...exclusionResult.rejected, ...scoringResult.aiRejected];
 
   const summary = {
     mode: 'score',
     jobsSeen: jobs.length,
     jobsAfterDedupe: dedupeResult.uniqueJobs.length,
     duplicatesRemoved: dedupeResult.duplicatesRemoved,
-    deterministicRejected: 0,
-    sentToScoring: dedupeResult.uniqueJobs.length,
+    deterministicRejected: exclusionResult.rejected.length,
+    sentToScoring: exclusionResult.accepted.length,
     aiRejected: scoringResult.aiRejected.length,
     shortlisted: shortlist.length,
     scoringFailures: scoringResult.failures.length,

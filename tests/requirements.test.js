@@ -45,6 +45,10 @@ industry_preferences:
 negative_skills:
   - java
 
+excluded_companies:
+  - stripe
+  - microsoft
+
 red_flags:
   - unpaid
 
@@ -67,5 +71,6 @@ weights:
   assert.equal(parsed.weights.title, 20);
   assert.equal(parsed.weights.company_quality, 5);
   assert.equal(parsed.weights.responsibilities, 15);
+  assert.deepEqual(parsed.excluded_companies, ['stripe', 'microsoft']);
   assert.deepEqual(parsed.all_titles, ['software engineer', 'senior software engineer']);
 });
