@@ -14,6 +14,7 @@ const {
   getInitialJobCardsState,
   getValidJobCardIndexes,
   inspectJobCards,
+  waitForJobCardsOrNoResults,
   autoScrollJobsList,
   goToNextResultsPage,
   hasLinkCollectionStalled,
@@ -38,6 +39,58 @@ const {
   writeCollectedJobLinks,
   writeFailedDetailUrls,
 } = __testables;
+
+function createCardElement({ text = '', href = null, trackingScope = null, dataJobId = null } = {}) {
+  const linkNode = href
+    ? {
+        getAttribute(name) {
+          return name === 'href' ? href : null;
+        },
+      }
+    : null;
+  const trackingNode = trackingScope
+    ? {
+        getAttribute(name) {
+          return name === 'data-view-tracking-scope' ? trackingScope : null;
+        },
+      }
+    : null;
+  const dataJobNode = dataJobId
+    ? {
+        getAttribute(name) {
+          return name === 'data-job-id' ? dataJobId : null;
+        },
+      }
+    : null;
+
+  return {
+    textContent: text,
+    getAttribute(name) {
+      return name === 'data-job-id' ? dataJobId : null;
+    },
+    querySelector(selector) {
+      if (selector === 'a[href]') {
+        return linkNode;
+      }
+      if (selector === '[data-view-tracking-scope]') {
+        return trackingNode;
+      }
+      if (selector === '[data-job-id]') {
+        return dataJobNode;
+      }
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === 'a[href]') {
+        return linkNode ? [linkNode] : [];
+      }
+      if (selector === '[data-view-tracking-scope]') {
+        return trackingNode ? [trackingNode] : [];
+      }
+      return [];
+    },
+  };
+}
 
 test("getJobCardsState recognizes the semantic job-card selector", async () => {
   const page = {
@@ -170,6 +223,110 @@ test("getInitialJobCardsState does not reload a true no-results page", async () 
     Date.now = originalNow;
   }
 });
+
+test("inspectJobCards ignores known non-job explainer signals", async () => {
+  const locator = {
+    evaluateAll: async (callback) => callback([
+      createCardElement({ text: 'How promoted jobs are ranked', href: '/help/linkedin/promoted-jobs' }),
+      createCardElement({ text: 'Associate Software Developer', dataJobId: '4405440356' }),
+    ]),
+  };
+
+  const signals = await inspectJobCards(locator);
+  assert.deepEqual(signals, [
+    { index: 1, text: 'Associate Software Developer', hasText: true, jobId: '4405440356' },
+  ]);
+});
+
+
+test("inspectJobCards does not rely on outer helper bindings inside evaluateAll", async () => {
+  const locator = {
+    evaluateAll: async (callback) => {
+      const source = callback.toString();
+      assert.match(source, /const isExcludedSignal = normalized === 'how promoted jobs are ranked'/);
+      assert.doesNotMatch(source, /isExcludedJobSignalText\(/);
+      return callback([
+        createCardElement({ text: 'How promoted jobs are ranked', href: '/help/linkedin/promoted-jobs' }),
+        createCardElement({ text: 'Associate Software Developer', dataJobId: '4405440356' }),
+      ]);
+    },
+  };
+
+  const signals = await inspectJobCards(locator);
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0].jobId, '4405440356');
+});
+
+
+test("getValidJobCardIndexes ignores explainer-only cards", async () => {
+  const locator = {
+    evaluateAll: async (callback) => callback([
+      createCardElement({ text: 'How promoted jobs are ranked', href: '/help/linkedin/promoted-jobs' }),
+      createCardElement({ text: 'Intermediate Developer', dataJobId: '4389958578' }),
+    ]),
+  };
+
+  const indexes = await getValidJobCardIndexes(null, locator, 2);
+  assert.deepEqual(indexes, [1]);
+});
+
+
+test("waitForJobCardsOrNoResults waits for multiple credible job signals before settling", async () => {
+  let now = 1;
+  let waitCalls = 0;
+  let stage = 0;
+  const originalNow = Date.now;
+  Date.now = () => now;
+
+  try {
+    const page = {
+      async waitForTimeout(ms) {
+        waitCalls += 1;
+        now += ms;
+        if (waitCalls >= 2) {
+          stage = 1;
+        }
+      },
+      locator(selector) {
+        if (selector === '.scaffold-layout__list-item') {
+          return {
+            count: async () => 26,
+            evaluateAll: async (callback) => callback(
+              stage === 0
+                ? [createCardElement({ text: 'How promoted jobs are ranked', href: '/help/linkedin/promoted-jobs' })]
+                : [
+                    createCardElement({ text: 'Intermediate Developer', dataJobId: '1' }),
+                    createCardElement({ text: 'SAP Developer', dataJobId: '2' }),
+                    createCardElement({ text: 'Senior Mobile Engineer', dataJobId: '3' }),
+                  ]
+            ),
+          };
+        }
+        if (selector === 'main') {
+          return {
+            count: async () => 1,
+            first() {
+              return {
+                textContent: async () => 'Software developer jobs in Alberta, Canada',
+              };
+            },
+          };
+        }
+        return {
+          count: async () => 0,
+          evaluateAll: async () => [],
+        };
+      },
+    };
+
+    await waitForJobCardsOrNoResults(page, 4000, 500);
+    assert.ok(waitCalls >= 4);
+    assert.equal(stage, 1);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 
 test("autoScrollJobsList uses at least the detected card count as scroll passes", async () => {
   let scrollCalls = 0;

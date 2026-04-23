@@ -93,6 +93,13 @@ function normalizeWhitespace(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
+function isExcludedJobSignalText(text) {
+  const normalized = normalizeWhitespace(text).toLowerCase();
+  return normalized === 'how promoted jobs are ranked'
+    || normalized.startsWith("we've found more results that may interest you")
+    || normalized.startsWith('we’ve found more results that may interest you');
+}
+
 async function textOrEmpty(locator) {
   const count = await locator.count();
   if (count === 0) {
@@ -150,11 +157,15 @@ async function getValidJobCardIndexes(page, locator, count) {
     const indexes = [];
     for (const [index, element] of elements.entries()) {
       const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+      const normalized = text.toLowerCase();
+      const isExcludedSignal = normalized === 'how promoted jobs are ranked'
+        || normalized.startsWith("we've found more results that may interest you")
+        || normalized.startsWith('we’ve found more results that may interest you');
       const hasTitle = text.length > 0;
       const hasHref = Boolean(element.querySelector('a[href]'));
       const hasTracking = Boolean(element.querySelector('[data-view-tracking-scope]'));
       const hasDataJobId = Boolean(element.getAttribute('data-job-id') || element.querySelector('[data-job-id]'));
-      if (hasTitle || hasHref || hasTracking || hasDataJobId) {
+      if (!isExcludedSignal && (hasTitle || hasHref || hasTracking || hasDataJobId)) {
         indexes.push(index);
       }
     }
@@ -217,6 +228,14 @@ async function inspectJobCards(locator) {
       const hasText = text.length > 0;
       const directDataJobId = element.getAttribute('data-job-id') || element.querySelector('[data-job-id]')?.getAttribute('data-job-id') || null;
       if (!hasText && !directDataJobId && !element.querySelector('a[href]') && !element.querySelector('[data-view-tracking-scope]')) {
+        return [];
+      }
+
+      const normalized = text.toLowerCase();
+      const isExcludedSignal = normalized === 'how promoted jobs are ranked'
+        || normalized.startsWith("we've found more results that may interest you")
+        || normalized.startsWith('we’ve found more results that may interest you');
+      if (isExcludedSignal && !directDataJobId) {
         return [];
       }
 
@@ -318,7 +337,9 @@ async function waitForJobCardsOrNoResults(page, timeoutMs = 8000, settleMs = 150
         firstCardsAt = Date.now();
       }
 
-      const signalCount = (await inspectJobCards(locator)).length;
+      const signals = await inspectJobCards(locator);
+      const signalCount = signals.length;
+      const readySignalThreshold = Math.min(count, 3);
       if (signalCount > bestSignalCount) {
         bestSignalCount = signalCount;
         lastImprovementAt = Date.now();
@@ -328,7 +349,7 @@ async function waitForJobCardsOrNoResults(page, timeoutMs = 8000, settleMs = 150
         return;
       }
 
-      if (bestSignalCount > 0 && Date.now() - firstCardsAt >= settleMs && Date.now() - lastImprovementAt >= settleMs) {
+      if (bestSignalCount >= readySignalThreshold && Date.now() - firstCardsAt >= settleMs && Date.now() - lastImprovementAt >= settleMs) {
         return;
       }
     }
@@ -1435,6 +1456,7 @@ export const __testables = {
   getInitialJobCardsState,
   getValidJobCardIndexes,
   inspectJobCards,
+  waitForJobCardsOrNoResults,
   autoScrollJobsList,
   goToNextResultsPage,
   hasLinkCollectionStalled,
