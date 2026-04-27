@@ -417,6 +417,81 @@ function buildLinkedInJobUrl(jobId) {
   return `https://www.linkedin.com/jobs/view/${jobId}/`;
 }
 
+const PAGINATION_NEXT_BUTTON_SELECTOR = '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]';
+
+async function getPaginationNextStates(page) {
+  const nextButtons = page.locator(PAGINATION_NEXT_BUTTON_SELECTOR);
+  if (typeof nextButtons?.evaluateAll !== 'function') {
+    return [];
+  }
+
+  return nextButtons.evaluateAll((elements) => elements.map((element, index) => {
+    const htmlElement = element;
+    const style = globalThis.getComputedStyle ? getComputedStyle(htmlElement) : null;
+    const className = typeof htmlElement.className === 'string' ? htmlElement.className : '';
+    const hiddenByLayout = 'offsetParent' in htmlElement ? htmlElement.offsetParent === null : false;
+    return {
+      index,
+      testId: htmlElement.getAttribute('data-testid'),
+      disabledAttr: htmlElement.getAttribute('disabled'),
+      ariaDisabled: htmlElement.getAttribute('aria-disabled'),
+      className,
+      hiddenByLayout,
+      display: style?.display || '',
+      visibility: style?.visibility || '',
+    };
+  })).catch(() => []);
+}
+
+function isUsableNextState(state) {
+  if (!state) {
+    return false;
+  }
+
+  if (state.disabledAttr !== null) {
+    return false;
+  }
+
+  if (typeof state.ariaDisabled === 'string' && state.ariaDisabled.toLowerCase() === 'true') {
+    return false;
+  }
+
+  const className = String(state.className || '').toLowerCase();
+  if (className.includes('disabled') || className.includes('artdeco-button--disabled')) {
+    return false;
+  }
+
+  if (state.hiddenByLayout || state.display === 'none' || state.visibility === 'hidden') {
+    return false;
+  }
+
+  return true;
+}
+
+function getUsableNextStateIndex(nextStates) {
+  return nextStates.findIndex((state) => isUsableNextState(state));
+}
+
+async function hasUsableNextButton(page) {
+  const nextStates = await getPaginationNextStates(page);
+  return getUsableNextStateIndex(nextStates) >= 0;
+}
+
+async function getUsableNextButton(page) {
+  const nextStates = await getPaginationNextStates(page);
+  const usableIndex = getUsableNextStateIndex(nextStates);
+  if (usableIndex < 0) {
+    return null;
+  }
+
+  const nextButtons = page.locator(PAGINATION_NEXT_BUTTON_SELECTOR);
+  if (typeof nextButtons?.nth === 'function') {
+    return nextButtons.nth(usableIndex);
+  }
+
+  return null;
+}
+
 function buildSearchResultsPageUrl(urlValue, start) {
   const url = new URL(urlValue);
   url.searchParams.delete('currentJobId');
@@ -426,10 +501,9 @@ function buildSearchResultsPageUrl(urlValue, start) {
 
 async function goToNextResultsPage(page, start) {
   const previousUrl = page.url();
-  const nextButton = page.locator('[data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next:not([disabled]), button[aria-label="Next"]:not([disabled]), button[aria-label="Next Page"]:not([disabled])').first();
+  const nextButton = await getUsableNextButton(page);
 
-  const nextCount = await nextButton.count().catch(() => 0);
-  if (nextCount > 0) {
+  if (nextButton) {
     const clicked = await nextButton.click({ timeout: 3000 }).then(() => true).catch(() => false);
     if (clicked) {
       const deadline = Date.now() + 10000;
@@ -598,36 +672,24 @@ function parseTotalResultsCount(text) {
 
 async function isLastPaginationPage(page) {
   const start = Number(new URL(page.url()).searchParams.get('start') ?? '0');
-  const { count: cardCount } = await getJobCardsState(page);
+  const { locator, count: cardCount } = await getJobCardsState(page);
+  const visibleSignalCount = (await inspectJobCards(locator)).filter((signal) => signal.hasText).length;
   const summaryText = await textOrEmpty(page.locator('body')).catch(() => '');
   const totalResults = parseTotalResultsCount(summaryText);
 
-  if (Number.isFinite(totalResults) && cardCount > 0 && start + cardCount >= totalResults) {
+  if (Number.isFinite(totalResults) && Math.max(cardCount, visibleSignalCount) > 0 && start + Math.max(cardCount, visibleSignalCount) >= totalResults) {
     return true;
   }
 
-  const nextButtons = page.locator('[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]');
-  const nextStates = await nextButtons.evaluateAll((elements) => elements.map((element) => {
-    const htmlElement = element;
-    const style = globalThis.getComputedStyle ? getComputedStyle(htmlElement) : null;
-    const hiddenByLayout = 'offsetParent' in htmlElement ? htmlElement.offsetParent === null : false;
-    return {
-      testId: htmlElement.getAttribute('data-testid'),
-      disabledAttr: htmlElement.getAttribute('disabled'),
-      ariaDisabled: htmlElement.getAttribute('aria-disabled'),
-      className: htmlElement.getAttribute('class') || '',
-      hiddenByLayout,
-      display: style?.display || '',
-      visibility: style?.visibility || '',
-    };
-  })).catch(() => []);
-  if (nextStates.some((state) => {
-    const disabled = state.disabledAttr !== null || state.ariaDisabled == 'true' || /disabled/i.test(state.className || '');
-    const hidden = state.testId == 'pagination-controls-next-button-hidden' || state.hiddenByLayout || state.display == 'none' || state.visibility == 'hidden';
-    return !disabled && !hidden;
-  })) {
+  const usableNextButton = await hasUsableNextButton(page);
+  if (usableNextButton) {
     return false;
   }
+  if (visibleSignalCount > 0 && visibleSignalCount < 25) {
+    return true;
+  }
+
+  const nextStates = await getPaginationNextStates(page);
   if (nextStates.length > 0) {
     return true;
   }
@@ -648,6 +710,9 @@ async function isLastPaginationPage(page) {
   const currentPageText = await textOrEmpty(page.locator('.artdeco-pagination__indicator--number.active, .artdeco-pagination__indicator.artdeco-pagination__indicator--number.selected, .artdeco-pagination__pages button[aria-current="true"], .artdeco-pagination__pages li.selected, .artdeco-pagination__pages .active')).catch(() => '');
 
   if (!paginationText || !currentPageText) {
+    if (visibleSignalCount > 0 && visibleSignalCount < 25) {
+      return true;
+    }
     return false;
   }
 
@@ -753,6 +818,14 @@ async function retryUnresolvedSignals(page, unresolvedSignals, links, seen, stal
   }
 
   return stillUnresolved;
+}
+
+async function shouldStopAfterPartialVisiblePage(page, visibleCount) {
+  if (!(visibleCount > 0 && visibleCount < 25)) {
+    return false;
+  }
+
+  return !(await hasUsableNextButton(page));
 }
 
 async function collectJobLinks(page, limit, options = {}) {
@@ -967,7 +1040,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
       break;
     }
 
-    if (lastPage) {
+    if (lastPage || await shouldStopAfterPartialVisiblePage(page, visibleCount)) {
       break;
     }
 
@@ -1458,6 +1531,12 @@ export const __testables = {
   inspectJobCards,
   waitForJobCardsOrNoResults,
   autoScrollJobsList,
+  getPaginationNextStates,
+  isUsableNextState,
+  getUsableNextStateIndex,
+  hasUsableNextButton,
+  getUsableNextButton,
+  shouldStopAfterPartialVisiblePage,
   goToNextResultsPage,
   hasLinkCollectionStalled,
   selectJobLinksForDetailScrape,

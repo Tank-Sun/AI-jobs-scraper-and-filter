@@ -16,6 +16,12 @@ const {
   inspectJobCards,
   waitForJobCardsOrNoResults,
   autoScrollJobsList,
+  getPaginationNextStates,
+  isUsableNextState,
+  getUsableNextStateIndex,
+  hasUsableNextButton,
+  getUsableNextButton,
+  shouldStopAfterPartialVisiblePage,
   goToNextResultsPage,
   hasLinkCollectionStalled,
   isLastPaginationPage,
@@ -123,6 +129,68 @@ test("getJobCardsState prefers the selector with the highest card count", async 
   const state = await getJobCardsState(page);
   assert.equal(state.selector, '.scaffold-layout__list-item');
   assert.equal(state.count, 25);
+});
+
+
+test("isUsableNextState rejects hidden or aria-disabled next buttons", () => {
+  assert.equal(isUsableNextState({ disabledAttr: null, ariaDisabled: 'true', className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' }), false);
+  assert.equal(isUsableNextState({ disabledAttr: null, ariaDisabled: null, className: 'artdeco-button--disabled', hiddenByLayout: false, display: 'block', visibility: 'visible' }), false);
+  assert.equal(isUsableNextState({ disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: true, display: 'block', visibility: 'visible' }), false);
+  assert.equal(isUsableNextState({ disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' }), true);
+});
+
+
+test("hasUsableNextButton only treats visible enabled next buttons as usable", async () => {
+  const page = {
+    locator(selector) {
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [
+            { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: 'true', className: 'artdeco-button artdeco-button--disabled', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
+          ],
+        };
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  assert.equal(await hasUsableNextButton(page), false);
+  assert.deepEqual(await getPaginationNextStates(page), [
+    { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: 'true', className: 'artdeco-button artdeco-button--disabled', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
+  ]);
+});
+
+
+test("shouldStopAfterPartialVisiblePage stops partial pages without a usable next button", async () => {
+  const pageWithoutNext = {
+    locator(selector) {
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [
+            { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: 'true', className: 'artdeco-button--disabled', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
+          ],
+        };
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  const pageWithNext = {
+    locator(selector) {
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [
+            { testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' },
+          ],
+        };
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  assert.equal(await shouldStopAfterPartialVisiblePage(pageWithoutNext, 20), true);
+  assert.equal(await shouldStopAfterPartialVisiblePage(pageWithNext, 20), false);
+  assert.equal(await shouldStopAfterPartialVisiblePage(pageWithoutNext, 25), false);
 });
 
 
@@ -373,8 +441,41 @@ test("autoScrollJobsList uses at least the detected card count as scroll passes"
   assert.equal(waits, 25);
 });
 
-test("goToNextResultsPage prefers the visible Next button before falling back to a direct URL", async () => {
-  let clicked = 0;
+
+test("hasUsableNextButton matches the same next-button selector used by goToNextResultsPage", async () => {
+  const pageWithGenericNextOnly = {
+    locator(selector) {
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [
+            { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: 'true', className: 'artdeco-button artdeco-button--disabled', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
+          ],
+        };
+      }
+      throw new Error(`Unexpected selector: ${selector}`);
+    },
+  };
+
+  const pageWithUsableNext = {
+    locator(selector) {
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [
+            { testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' },
+          ],
+        };
+      }
+      throw new Error(`Unexpected selector: ${selector}`);
+    },
+  };
+
+  assert.equal(await hasUsableNextButton(pageWithGenericNextOnly), false);
+  assert.equal(await hasUsableNextButton(pageWithUsableNext), true);
+});
+
+
+test("goToNextResultsPage clicks the usable visible Next button before falling back to a direct URL", async () => {
+  let clickedIndex = null;
   const waits = [];
   const page = {
     _url: 'https://www.linkedin.com/jobs/search-results/?currentJobId=123',
@@ -392,16 +493,23 @@ test("goToNextResultsPage prefers the visible Next button before falling back to
           },
         };
       }
-      assert.match(selector, /pagination-controls-next-button-visible/);
-      return {
-        first: () => ({
-          count: async () => 1,
-          click: async () => {
-            clicked += 1;
-            page._url = 'https://www.linkedin.com/jobs/search-results/?start=25';
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [
+            { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: 'true', className: 'artdeco-button--disabled', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
+            { testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' },
+          ],
+          nth(index) {
+            return {
+              click: async () => {
+                clickedIndex = index;
+                page._url = 'https://www.linkedin.com/jobs/search-results/?start=25';
+              },
+            };
           },
-        }),
-      };
+        };
+      }
+      return createLocator({ count: 0 });
     },
     waitForTimeout: async (ms) => {
       waits.push(ms);
@@ -412,7 +520,7 @@ test("goToNextResultsPage prefers the visible Next button before falling back to
   };
 
   await goToNextResultsPage(page, 25);
-  assert.equal(clicked, 1);
+  assert.equal(clickedIndex, 1);
   assert.equal(page.url(), 'https://www.linkedin.com/jobs/search-results/?start=25');
   assert.ok(waits.length >= 1);
 });
@@ -463,15 +571,19 @@ test("goToNextResultsPage falls back to a direct URL when page content changes b
         return this._url;
       },
       locator(selector) {
-        if (/pagination-controls-next-button-visible/.test(selector)) {
+        if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
           return {
-            first: () => ({
-              count: async () => 1,
-              click: async () => {
-                clicked += 1;
-                pageText = 'Page two jobs';
-              },
-            }),
+            evaluateAll: async () => [
+              { testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' },
+            ],
+            nth() {
+              return {
+                click: async () => {
+                  clicked += 1;
+                  pageText = 'Page two jobs';
+                },
+              };
+            },
           };
         }
         if (selector === 'main') {
@@ -580,9 +692,10 @@ test("isNoResultsPage detects empty LinkedIn results pages", async () => {
 });
 
 
-function createLocator({ count = 1, text = '', attributes = {} } = {}) {
+function createLocator({ count = 1, text = '', attributes = {}, evaluateAllResult = [] } = {}) {
   return {
     count: async () => count,
+    evaluateAll: async () => evaluateAllResult,
     first() {
       return {
         textContent: async () => text,
@@ -599,7 +712,7 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
     },
     locator(selector) {
       if (selector === '[data-view-name="job-search-job-card"]') {
-        return createLocator({ count: 4 });
+        return createLocator({ count: 4, evaluateAllResult: Array.from({ length: 4 }, (_, index) => ({ index, text: `Job ${index + 1}`, hasText: true, jobId: String(index + 1) })) });
       }
       if (selector === 'body') {
         return createLocator({ text: '54 results Alberta, Canada Previous 1 2 3 Next' });
@@ -619,7 +732,7 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
     },
     locator(selector) {
       if (selector === '[data-view-name="job-search-job-card"]') {
-        return createLocator({ count: 4 });
+        return createLocator({ count: 4, evaluateAllResult: Array.from({ length: 4 }, (_, index) => ({ index, text: `Job ${index + 1}`, hasText: true, jobId: String(index + 1) })) });
       }
       if (selector === 'body') {
         return createLocator({ text: '99+ results Alberta, Canada Previous 1 2 3 Next' });
@@ -639,7 +752,7 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
     },
     locator(selector) {
       if (selector === '[data-view-name="job-search-job-card"]') {
-        return createLocator({ count: 25 });
+        return createLocator({ count: 25, evaluateAllResult: Array.from({ length: 25 }, (_, index) => ({ index, text: `Job ${index + 1}`, hasText: true, jobId: String(index + 1) })) });
       }
       if (selector === 'body') {
         return createLocator({ text: '99+ results Alberta, Canada Previous 15 16 17 Next' });
@@ -674,13 +787,19 @@ test("isLastPaginationPage detects exact final windows, hidden next buttons, and
   },
   locator(selector) {
     if (selector === '[data-view-name="job-search-job-card"]') {
-      return createLocator({ count: 25 });
+      return createLocator({ count: 25, evaluateAllResult: Array.from({ length: 25 }, (_, index) => ({ index, text: `Job ${index + 1}`, hasText: true, jobId: String(index + 1) })) });
     }
     if (selector === 'body') {
       return createLocator({ text: '99+ results Alberta, Canada Previous 1 2 3 Next' });
     }
     if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
       return {
+        count: async () => 1,
+        first() {
+          return {
+            count: async () => 1,
+          };
+        },
         evaluateAll: async () => [{ testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' }],
       };
     }
@@ -709,13 +828,19 @@ const pageWithMorePages = {
     },
     locator(selector) {
       if (selector === '[data-view-name="job-search-job-card"]') {
-        return createLocator({ count: 25 });
+        return createLocator({ count: 25, evaluateAllResult: Array.from({ length: 25 }, (_, index) => ({ index, text: `Job ${index + 1}`, hasText: true, jobId: String(index + 1) })) });
       }
       if (selector === 'body') {
         return createLocator({ text: '54 results Alberta, Canada Previous 1 2 3 Next' });
       }
       if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
         return {
+          count: async () => 1,
+          first() {
+            return {
+              count: async () => 1,
+            };
+          },
           evaluateAll: async () => [
             { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
             { testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' },
@@ -748,6 +873,128 @@ const pageWithMorePages = {
   assert.equal(await isLastPaginationPage(pageWithMorePages), false);
 });
 
+
+
+test("isLastPaginationPage treats a partial page with pagination text but no usable next button as the last page", async () => {
+  const page = {
+    url() {
+      return 'https://www.linkedin.com/jobs/search-results/?start=0';
+    },
+    locator(selector) {
+      if (selector === '.scaffold-layout__list-item') {
+        return {
+          count: async () => 18,
+          evaluateAll: async (callback) => callback([
+            createCardElement({ text: 'Lead Data Engineer - Databricks (Remote)', dataJobId: '1' }),
+            createCardElement({ text: 'Software Developer', dataJobId: '2' }),
+            createCardElement({ text: 'Intermediate Developer', dataJobId: '3' }),
+            createCardElement({ text: 'Frontend Engineer', dataJobId: '4' }),
+            createCardElement({ text: 'Platform Engineer', dataJobId: '5' }),
+            createCardElement({ text: 'Backend Developer', dataJobId: '6' }),
+            createCardElement({ text: 'API Engineer', dataJobId: '7' }),
+            createCardElement({ text: 'DevOps Engineer', dataJobId: '8' }),
+            createCardElement({ text: 'QA Automation Developer', dataJobId: '9' }),
+            createCardElement({ text: 'Web Developer', dataJobId: '10' }),
+            createCardElement({ text: 'Data Engineer', dataJobId: '11' }),
+            createCardElement({ text: 'Full Stack Engineer', dataJobId: '12' }),
+            createCardElement({ text: 'React Developer', dataJobId: '13' }),
+            createCardElement({ text: 'JavaScript Developer', dataJobId: '14' }),
+            createCardElement({ text: 'Software Engineer in Test', dataJobId: '15' }),
+            createCardElement({ text: 'CICD Programmer Analyst II', dataJobId: '16' }),
+            createCardElement({ text: 'Lead Software Engineer', dataJobId: '17' }),
+            createCardElement({ text: 'How promoted jobs are ranked', href: '/help/linkedin/promoted-jobs' }),
+          ]),
+        };
+      }
+      if (selector === 'body') {
+        return createLocator({ text: '17 results Alberta, Canada Previous 1 2 3 Next' });
+      }
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [],
+        };
+      }
+      if (selector === 'button[data-testid^="pagination-indicator-"]') {
+        return {
+          count: async () => 3,
+          evaluateAll: async () => ['1', '2', '3'],
+          first() {
+            return {
+              textContent: async () => '',
+              getAttribute: async () => null,
+            };
+          },
+        };
+      }
+      if (selector === 'button[data-testid^="pagination-indicator-"][aria-current="true"]') {
+        return createLocator({ text: '1' });
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  assert.equal(await isLastPaginationPage(page), true);
+});
+
+
+test("isLastPaginationPage treats a partial page with no next or pagination controls as the last page", async () => {
+  const page = {
+    url() {
+      return 'https://www.linkedin.com/jobs/search-results/?start=0';
+    },
+    locator(selector) {
+      if (selector === '.scaffold-layout__list-item') {
+        return {
+          count: async () => 17,
+          evaluateAll: async (callback) => callback([
+            createCardElement({ text: 'Senior Data Engineer (Remote)', dataJobId: '1' }),
+            createCardElement({ text: 'Software Developer II', dataJobId: '2' }),
+            createCardElement({ text: 'Frontend Developer', dataJobId: '3' }),
+            createCardElement({ text: 'Intermediate Developer', dataJobId: '4' }),
+            createCardElement({ text: 'Platform Engineer', dataJobId: '5' }),
+            createCardElement({ text: 'Backend Engineer', dataJobId: '6' }),
+            createCardElement({ text: 'Full Stack Engineer', dataJobId: '7' }),
+            createCardElement({ text: 'Web Developer', dataJobId: '8' }),
+            createCardElement({ text: 'Data Engineer', dataJobId: '9' }),
+            createCardElement({ text: 'DevOps Engineer', dataJobId: '10' }),
+            createCardElement({ text: 'API Engineer', dataJobId: '11' }),
+            createCardElement({ text: 'JavaScript Developer', dataJobId: '12' }),
+            createCardElement({ text: 'React Developer', dataJobId: '13' }),
+            createCardElement({ text: 'Software Engineer', dataJobId: '14' }),
+            createCardElement({ text: 'QA Automation Developer', dataJobId: '15' }),
+            createCardElement({ text: 'Engineering Analyst', dataJobId: '16' }),
+            createCardElement({ text: 'How promoted jobs are ranked', href: '/help/linkedin/promoted-jobs' }),
+          ]),
+        };
+      }
+      if (selector === 'body') {
+        return createLocator({ text: 'Software developer jobs in Alberta, Canada' });
+      }
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return {
+          evaluateAll: async () => [],
+        };
+      }
+      if (selector === 'button[data-testid^="pagination-indicator-"]') {
+        return {
+          count: async () => 0,
+          evaluateAll: async () => [],
+          first() {
+            return {
+              textContent: async () => '',
+              getAttribute: async () => null,
+            };
+          },
+        };
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  assert.equal(await isLastPaginationPage(page), true);
+});
+
+
 test("isLastPaginationPage prefers a visible next button even when a hidden next button is also present in the DOM", async () => {
   const pageWithBothNextStates = {
     url() {
@@ -755,13 +1002,19 @@ test("isLastPaginationPage prefers a visible next button even when a hidden next
     },
     locator(selector) {
       if (selector === '[data-view-name="job-search-job-card"]') {
-        return createLocator({ count: 25 });
+        return createLocator({ count: 25, evaluateAllResult: Array.from({ length: 25 }, (_, index) => ({ index, text: `Job ${index + 1}`, hasText: true, jobId: String(index + 1) })) });
       }
       if (selector === 'body') {
         return createLocator({ text: '99+ results Greater Vancouver, BC Previous 1 2 3 Next' });
       }
       if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
         return {
+          count: async () => 1,
+          first() {
+            return {
+              count: async () => 1,
+            };
+          },
           evaluateAll: async () => [
             { testId: 'pagination-controls-next-button-hidden', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: true, display: 'none', visibility: 'hidden' },
             { testId: 'pagination-controls-next-button-visible', disabledAttr: null, ariaDisabled: null, className: '', hiddenByLayout: false, display: 'block', visibility: 'visible' },
