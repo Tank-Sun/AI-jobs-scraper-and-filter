@@ -28,7 +28,15 @@ const {
   isNoResultsPage,
   selectJobLinksForDetailScrape,
   parseHeaderFromMainText,
+  parseLinkedInPageTitle,
   parseMetadataFieldsFromText,
+  firstValidJobTitle,
+  firstValidLocation,
+  firstValidPostedTime,
+  hasUsableJobDetailHeader,
+  waitForUsableJobDetailHeader,
+  hasUsableJobDetailDescription,
+  waitForUsableJobDetailDescription,
   parseTotalResultsCount,
   parseCompanySizeFromMainText,
   extractJobIdFromDetailPane,
@@ -1190,6 +1198,7 @@ test("loadJobDetailPage retries once after a timeout and then succeeds", async (
   const waits = [];
   let calls = 0;
   const page = {
+    title: async () => 'Software Engineer | Example Co | LinkedIn',
     goto: async () => {
       calls += 1;
       if (calls === 1) {
@@ -1198,6 +1207,18 @@ test("loadJobDetailPage retries once after a timeout and then succeeds", async (
         throw error;
       }
     },
+    locator(selector) {
+      if (selector.includes('job-details-jobs-unified-top-card__company-name')) {
+        return createLocator({ text: 'Example Co' });
+      }
+      if (selector.includes('job-details-jobs-unified-top-card__job-title')) {
+        return createLocator({ text: 'Software Engineer' });
+      }
+      if (selector.includes('jobs-description__content')) {
+        return createLocator({ text: 'About the job This role builds reliable customer-facing product features with JavaScript, TypeScript, Node.js, APIs, testing, and operational ownership across the full software lifecycle.' });
+      }
+      return createLocator({ count: 0 });
+    },
     waitForTimeout: async (ms) => {
       waits.push(ms);
     },
@@ -1205,7 +1226,71 @@ test("loadJobDetailPage retries once after a timeout and then succeeds", async (
 
   await loadJobDetailPage(page, 'https://www.linkedin.com/jobs/view/123/');
   assert.equal(calls, 2);
-  assert.deepEqual(waits, [1000, 2200]);
+  assert.deepEqual(waits, [1000]);
+});
+
+test("parseLinkedInPageTitle and field validators reject partially hydrated company-only headers", () => {
+  assert.deepEqual(parseLinkedInPageTitle('| Hopper | LinkedIn'), { title: '', company: 'Hopper' });
+  assert.deepEqual(parseLinkedInPageTitle('Senior Backend Engineer | Hopper | LinkedIn'), { title: 'Senior Backend Engineer', company: 'Hopper' });
+  assert.equal(firstValidJobTitle('Hopper', '| Hopper'), '');
+  assert.equal(firstValidJobTitle('Hopper', '| Hopper', 'Senior Backend Engineer'), 'Senior Backend Engineer');
+  assert.equal(firstValidLocation('Hopper', '', 'Hopper', 'Vancouver, BC'), 'Vancouver, BC');
+  assert.equal(firstValidPostedTime('61 years ago', 'Reposted 19 hours ago'), 'Reposted 19 hours ago');
+});
+
+test("parseMetadataFieldsFromText ignores company-only partial detail metadata", () => {
+  assert.deepEqual(parseMetadataFieldsFromText('Hopper · 61 years ago · Over 100 people clicked apply'), {
+    location: '',
+    postedTime: '',
+    applicantInfo: 'Over 100 people clicked apply',
+    employmentType: '',
+  });
+});
+
+test("waitForUsableJobDetailHeader waits through a partially hydrated company-only page", async () => {
+  let waits = 0;
+  const page = {
+    title: async () => (waits === 0 ? '| Scribd, Inc. | LinkedIn' : 'Senior Frontend Engineer | Scribd, Inc. | LinkedIn'),
+    locator(selector) {
+      if (selector.includes('job-details-jobs-unified-top-card__company-name')) {
+        return createLocator({ text: 'Scribd, Inc.' });
+      }
+      if (selector.includes('job-details-jobs-unified-top-card__job-title')) {
+        return createLocator({ text: waits === 0 ? '' : 'Senior Frontend Engineer' });
+      }
+      return createLocator({ count: 0 });
+    },
+    waitForTimeout: async () => {
+      waits += 1;
+    },
+  };
+
+  assert.equal(await hasUsableJobDetailHeader(page), false);
+  assert.equal(await waitForUsableJobDetailHeader(page, 1000), true);
+  assert.equal(waits, 1);
+});
+
+test("waitForUsableJobDetailDescription waits through an initially empty detail body", async () => {
+  let waits = 0;
+  const loadedDescription = 'About the job This Security Developer role includes designing application security tooling, building services, integrating APIs, writing production code, and collaborating with software teams.';
+  const page = {
+    locator(selector) {
+      if (selector.includes('jobs-description__content')) {
+        return createLocator({ text: waits === 0 ? '' : loadedDescription });
+      }
+      if (selector === 'main') {
+        return createLocator({ text: waits === 0 ? 'Security Developer Raise Calgary, AB' : loadedDescription });
+      }
+      return createLocator({ count: 0 });
+    },
+    waitForTimeout: async () => {
+      waits += 1;
+    },
+  };
+
+  assert.equal(await hasUsableJobDetailDescription(page), false);
+  assert.equal(await waitForUsableJobDetailDescription(page, 1000), true);
+  assert.equal(waits, 1);
 });
 
 test("extractJobIdFromDetailPane reads the selected job id from detail links", async () => {

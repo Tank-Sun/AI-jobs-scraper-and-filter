@@ -1139,6 +1139,123 @@ function cleanHeaderPart(value) {
     .trim();
 }
 
+function normalizeComparisonValue(value) {
+  return normalizeWhitespace(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function cleanLinkedInTitleCandidate(value) {
+  return normalizeWhitespace(value)
+    .replace(/^\|+\s*/, '')
+    .replace(/\s*\|\s*LinkedIn$/i, '')
+    .trim();
+}
+
+function parseLinkedInPageTitle(pageTitle) {
+  const parts = String(pageTitle ?? '')
+    .split('|')
+    .map((part) => normalizeWhitespace(part))
+    .filter(Boolean)
+    .filter((part) => part.toLowerCase() !== 'linkedin');
+
+  if (parts.length >= 2) {
+    return {
+      title: parts[0],
+      company: parts[1],
+    };
+  }
+
+  if (parts.length === 1) {
+    return {
+      title: '',
+      company: parts[0],
+    };
+  }
+
+  return {
+    title: '',
+    company: '',
+  };
+}
+
+function isValidJobTitleCandidate(value, company = '') {
+  const cleaned = cleanLinkedInTitleCandidate(value);
+  if (!cleaned) {
+    return false;
+  }
+
+  const normalizedTitle = normalizeComparisonValue(cleaned);
+  if (!normalizedTitle || normalizedTitle === 'linkedin') {
+    return false;
+  }
+
+  const normalizedCompany = normalizeComparisonValue(company);
+  return !(normalizedCompany && normalizedTitle === normalizedCompany);
+}
+
+function firstValidJobTitle(company, ...candidates) {
+  for (const candidate of candidates) {
+    const cleaned = cleanLinkedInTitleCandidate(candidate);
+    if (isValidJobTitleCandidate(cleaned, company)) {
+      return cleaned;
+    }
+  }
+
+  return '';
+}
+
+function isPlausiblePostedTime(value) {
+  const text = normalizeWhitespace(value);
+  if (!/\b(?:today|yesterday|\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago|reposted\s+\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago)\b/i.test(text)) {
+    return false;
+  }
+
+  const yearsMatch = text.match(/\b(\d+)\s+years?\s+ago\b/i);
+  return !(yearsMatch && Number(yearsMatch[1]) > 2);
+}
+
+function firstValidPostedTime(...candidates) {
+  return candidates.map((candidate) => normalizeWhitespace(candidate)).find((candidate) => isPlausiblePostedTime(candidate)) ?? '';
+}
+
+function looksLikeLocation(value) {
+  const text = normalizeWhitespace(value);
+  if (!text) {
+    return false;
+  }
+
+  if (/\b(?:remote|hybrid|on-site|onsite)\b/i.test(text)) {
+    return true;
+  }
+
+  if (text.includes(',')) {
+    return true;
+  }
+
+  return /\b(?:Canada|United States|USA|BC|AB|ON|QC|NS|NB|MB|SK|NL|PE|YT|NT|NU|CA|NY|WA|TX)\b/i.test(text);
+}
+
+function firstValidLocation(company, title, ...candidates) {
+  const normalizedCompany = normalizeComparisonValue(company);
+  const normalizedTitle = normalizeComparisonValue(title);
+
+  for (const candidate of candidates) {
+    const cleaned = normalizeWhitespace(candidate);
+    const normalizedCandidate = normalizeComparisonValue(cleaned);
+    if (!cleaned || !looksLikeLocation(cleaned)) {
+      continue;
+    }
+    if (normalizedCompany && normalizedCandidate === normalizedCompany) {
+      continue;
+    }
+    if (normalizedTitle && normalizedCandidate === normalizedTitle) {
+      continue;
+    }
+    return cleaned;
+  }
+
+  return '';
+}
+
 function parseMetadataFieldsFromText(text) {
   const parts = normalizeLinkedInMainText(text)
     .split('|')
@@ -1152,11 +1269,10 @@ function parseMetadataFieldsFromText(text) {
   let employmentType = '';
 
   for (const part of parts) {
-    const isPostedTime = /\b(?:today|yesterday|\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago|reposted\s+\d+\s+(?:minute|hour|day|week|month|year)s?\s+ago)\b/i.test(part);
     const applicantMatch = part.match(/(?:over\s+)?\d+\+?\s+people clicked apply|\d+\+?\s+applicants?/i);
     const employmentMatch = part.match(/\b(Full-time|Part-time|Contract|Temporary|Internship|Volunteer)\b/i);
 
-    if (!postedTime && isPostedTime) {
+    if (!postedTime && isPlausiblePostedTime(part)) {
       postedTime = part;
       continue;
     }
@@ -1171,7 +1287,7 @@ function parseMetadataFieldsFromText(text) {
       continue;
     }
 
-    if (!location) {
+    if (!location && looksLikeLocation(part)) {
       location = part;
     }
   }
@@ -1186,9 +1302,7 @@ function parseMetadataFieldsFromText(text) {
 
 function parseHeaderFromMainText(mainText, pageTitle) {
   const normalizedText = normalizeLinkedInMainText(mainText);
-  const titleParts = pageTitle.split(' | ').map((part) => normalizeWhitespace(part));
-  const parsedTitle = titleParts[0] ?? '';
-  const parsedCompany = titleParts[1] ?? '';
+  const { title: parsedTitle, company: parsedCompany } = parseLinkedInPageTitle(pageTitle);
 
   const headerStarts = [
     `${parsedCompany}${parsedTitle}`,
@@ -1296,7 +1410,57 @@ function parseSalaryFromMainText(mainText) {
 
 function isPlaywrightTimeoutError(error) {
   const message = error?.message || '';
-  return error?.name == 'TimeoutError' || /Timeout\s*\d+ms exceeded/i.test(message) || /page\.goto: Timeout/i.test(message);
+  return error?.name == 'TimeoutError' || /Timeout\s*\d+ms exceeded/i.test(message) || /page\.goto: Timeout/i.test(message) || /usable LinkedIn job detail header/i.test(message) || /usable LinkedIn job detail description/i.test(message);
+}
+
+async function hasUsableJobDetailHeader(page) {
+  const pageTitle = typeof page.title === 'function' ? await page.title().catch(() => '') : '';
+  const pageTitleHeader = parseLinkedInPageTitle(pageTitle);
+  const company = firstNonEmpty(
+    await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__company-name a, .job-details-jobs-unified-top-card__company-name, a[href*="/company/"]')).catch(() => ''),
+    pageTitleHeader.company
+  );
+  const title = firstValidJobTitle(
+    company,
+    await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__job-title, .t-24.job-details-jobs-unified-top-card__job-title')).catch(() => ''),
+    pageTitleHeader.title
+  );
+
+  return Boolean(title && company);
+}
+
+async function waitForUsableJobDetailHeader(page, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await hasUsableJobDetailHeader(page)) {
+      return true;
+    }
+    await page.waitForTimeout(250);
+  }
+
+  return false;
+}
+
+async function hasUsableJobDetailDescription(page) {
+  const directDescription = await textOrEmpty(page.locator('.jobs-description__content, .jobs-box__html-content, .jobs-description-content__text, .show-more-less-html__markup, .description__text')).catch(() => '');
+  if (sanitizeDescription(directDescription).length >= 80) {
+    return true;
+  }
+
+  const mainText = await textOrEmpty(page.locator('main').first()).catch(() => '');
+  return parseDescriptionFromMainText(mainText).length >= 80;
+}
+
+async function waitForUsableJobDetailDescription(page, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await hasUsableJobDetailDescription(page)) {
+      return true;
+    }
+    await page.waitForTimeout(250);
+  }
+
+  return false;
 }
 
 async function loadJobDetailPage(page, jobUrl, options = {}) {
@@ -1310,7 +1474,14 @@ async function loadJobDetailPage(page, jobUrl, options = {}) {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       await page.goto(jobUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-      await page.waitForTimeout(settleMs);
+      const hasHeader = await waitForUsableJobDetailHeader(page, settleMs + 8000);
+      if (!hasHeader) {
+        throw new Error(`Timed out waiting for a usable LinkedIn job detail header for ${jobUrl}`);
+      }
+      const hasDescription = await waitForUsableJobDetailDescription(page, settleMs + 8000);
+      if (!hasDescription) {
+        throw new Error(`Timed out waiting for a usable LinkedIn job detail description for ${jobUrl}`);
+      }
       return;
     } catch (error) {
       lastError = error;
@@ -1339,20 +1510,23 @@ async function scrapeJobDetail(page, jobUrl) {
   );
   const primaryDescription = parseMetadataFieldsFromText(primaryDescriptionText);
 
-  const title = firstNonEmpty(
-    await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__job-title, .t-24.job-details-jobs-unified-top-card__job-title')),
-    header.title
-  );
   const company = firstNonEmpty(
     await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__company-name a, .job-details-jobs-unified-top-card__company-name, a[href*="/company/"]')),
     header.company
   );
-  const location = firstNonEmpty(
+  const title = firstValidJobTitle(
+    company,
+    await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__job-title, .t-24.job-details-jobs-unified-top-card__job-title')),
+    header.title
+  );
+  const location = firstValidLocation(
+    company,
+    title,
     primaryDescription.location,
     await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__primary-description-container span').nth(0)),
     header.location
   );
-  const postedTime = firstNonEmpty(
+  const postedTime = firstValidPostedTime(
     primaryDescription.postedTime,
     await textOrEmpty(page.locator('.job-details-jobs-unified-top-card__primary-description-container span').nth(1)),
     header.postedTime
@@ -1519,7 +1693,15 @@ export async function collectJobs({ rawJobsPath, limit = 200, cdpUrl, source = '
 export const __testables = {
   buildSearchResultsPageUrl,
   parseHeaderFromMainText,
+  parseLinkedInPageTitle,
   parseMetadataFieldsFromText,
+  firstValidJobTitle,
+  firstValidLocation,
+  firstValidPostedTime,
+  hasUsableJobDetailHeader,
+  waitForUsableJobDetailHeader,
+  hasUsableJobDetailDescription,
+  waitForUsableJobDetailDescription,
   parseDescriptionFromMainText,
   parseCompanySizeFromMainText,
   buildSignalDiagnosticKey,
