@@ -116,7 +116,7 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   assert.ok(!prompt.includes('screeningNotes'));
 });
 
-const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, determineHeuristicDecision, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, normalizeGeminiResult, riskScore, toAiRejectionReasons } = __testables;
+const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, determineHeuristicDecision, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, normalizeAiBreakdown, normalizeGeminiResult, parseAiJsonText, resolveScoringProvider, riskScore, toAiRejectionReasons } = __testables;
 
 test('hasAiProductSignal boosts AI application roles but not model-training or platform roles', () => {
   assert.equal(
@@ -177,10 +177,11 @@ test('scoreJobs sends AI-rejected low-fit jobs to aiRejected in AI-only screenin
   assert.ok(result.aiRejected[0].totalScore < 60);
 });
 
-test('toAiRejectionReasons includes the Gemini fallback error when heuristic scoring is used after a failure', () => {
+test('toAiRejectionReasons includes the provider fallback error when heuristic scoring is used after a failure', () => {
   const reasons = toAiRejectionReasons({
     rejectReason: 'Heuristic fallback score below shortlist threshold.',
     scoringFailureMessage: '429 Too Many Requests',
+    scoringProviderLabel: 'Xiaomi MiMo',
     breakdown: {
       skills: 12,
       responsibilities: 45,
@@ -194,7 +195,79 @@ test('toAiRejectionReasons includes the Gemini fallback error when heuristic sco
 
   assert.equal(reasons[0].field, 'aiDecision');
   assert.equal(reasons[1].field, 'scoringFallback');
+  assert.match(reasons[1].message, /Xiaomi MiMo scoring failed/);
   assert.match(reasons[1].message, /429 Too Many Requests/);
+});
+
+test('resolveScoringProvider supports Gemini, Xiaomi Token Plan, and heuristic modes', () => {
+  assert.deepEqual(resolveScoringProvider({ AI_PROVIDER: 'heuristic' }), {
+    provider: 'heuristic',
+    label: 'Heuristic',
+    apiKey: '',
+    model: '',
+    baseUrl: '',
+    maxCompletionTokens: 2048,
+    scoringMode: 'heuristic-only',
+  });
+
+  assert.deepEqual(resolveScoringProvider({ AI_PROVIDER: 'xiaomi', XIAOMI_API_KEY: 'tp-test' }), {
+    provider: 'xiaomi',
+    label: 'Xiaomi MiMo',
+    apiKey: 'tp-test',
+    model: 'mimo-v2.5-pro',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+    maxCompletionTokens: 2048,
+    scoringMode: 'xiaomi:mimo-v2.5-pro',
+  });
+
+  assert.deepEqual(resolveScoringProvider({
+    AI_PROVIDER: 'xiaomi',
+    XIAOMI_API_KEY: 'tp-test',
+    XIAOMI_BASE_URL: 'https://token-plan-ams.xiaomimimo.com/v1/',
+    XIAOMI_MAX_COMPLETION_TOKENS: '1024',
+  }), {
+    provider: 'xiaomi',
+    label: 'Xiaomi MiMo',
+    apiKey: 'tp-test',
+    model: 'mimo-v2.5-pro',
+    baseUrl: 'https://token-plan-ams.xiaomimimo.com/v1',
+    maxCompletionTokens: 1024,
+    scoringMode: 'xiaomi:mimo-v2.5-pro',
+  });
+
+  assert.equal(resolveScoringProvider({ GEMINI_API_KEY: 'gemini-key' }).provider, 'gemini');
+  assert.equal(resolveScoringProvider({ XIAOMI_API_KEY: 'tp-test' }).provider, 'xiaomi');
+  assert.throws(() => resolveScoringProvider({ AI_PROVIDER: 'xiaomi', XIAOMI_API_KEY: '' }), /requires XIAOMI_API_KEY/);
+  assert.throws(() => resolveScoringProvider({ AI_PROVIDER: 'gemini', GEMINI_API_KEY: '' }), /requires GEMINI_API_KEY/);
+  assert.throws(() => resolveScoringProvider({ AI_PROVIDER: 'unknown' }), /Unsupported AI_PROVIDER/);
+});
+
+test('parseAiJsonText accepts plain, fenced, and wrapped JSON provider responses', () => {
+  assert.deepEqual(parseAiJsonText('{\"decision\":\"shortlist\"}'), { decision: 'shortlist' });
+  assert.deepEqual(parseAiJsonText('```json\n{\"decision\":\"reject\"}\n```'), { decision: 'reject' });
+  assert.deepEqual(parseAiJsonText('prefix {\"decision\":\"shortlist\"} suffix'), { decision: 'shortlist' });
+});
+
+test('normalizeAiBreakdown accepts Xiaomi scores alias without rescaling mixed 0-100 scores', () => {
+  assert.deepEqual(normalizeAiBreakdown({
+    scores: {
+      skills: 5,
+      responsibilities: 5,
+      company_quality: 10,
+      title: 5,
+      seniority: 10,
+      growth: 5,
+      risk: 90,
+    },
+  }, 'xiaomi'), {
+    skills: 5,
+    responsibilities: 5,
+    company_quality: 10,
+    title: 5,
+    seniority: 10,
+    growth: 5,
+    risk: 90,
+  });
 });
 
 
@@ -567,6 +640,7 @@ test('normalizeGeminiResult scales 1-10 Gemini scores up to 0-100 and recomputes
     gaps: ['kubernetes'],
   }, requirements.weights);
 
+  assert.equal(normalized.rawModelDecision, 'shortlist');
   assert.equal(normalized.totalScore, 85);
   assert.deepEqual(normalized.breakdown, {
     skills: 90,
@@ -607,6 +681,29 @@ test('normalizeGeminiResult ignores inconsistent Gemini total_score and recomput
     growth: 88,
     risk: 60,
   });
+});
+
+test('normalizeGeminiResult corrects contradictory reject decisions when score is high and reject_reason is empty', () => {
+  const normalized = normalizeGeminiResult({
+    decision: 'reject',
+    total_score: 68,
+    scores: {
+      skills: 65,
+      responsibilities: 75,
+      company_quality: 80,
+      title: 70,
+      seniority: 80,
+      growth: 70,
+      risk: 30,
+    },
+    why_recommended: 'Strong fit.',
+    reject_reason: '',
+    gaps: [],
+  }, requirements.weights, 'xiaomi');
+
+  assert.equal(normalized.rawModelDecision, 'reject');
+  assert.equal(normalized.decision, 'shortlist');
+  assert.equal(normalized.totalScore, 68);
 });
 
 test('calculateWeightedTotalScore matches the documented requirements weights', () => {

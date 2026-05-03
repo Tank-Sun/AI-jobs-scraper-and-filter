@@ -4,7 +4,10 @@ import path from 'node:path';
 
 import { GoogleGenAI, Type } from '@google/genai';
 
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const DEFAULT_XIAOMI_MODEL = 'mimo-v2.5-pro';
+const DEFAULT_XIAOMI_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
+const DEFAULT_XIAOMI_MAX_COMPLETION_TOKENS = 2048;
 const DEFAULT_SCORE_CONCURRENCY = 4;
 const SCORING_SIGNATURE_VERSION = '2026-04-09-heuristic-fallback-aligned-v17';
 
@@ -719,8 +722,11 @@ function buildGeminiPrompt(job, requirements, resume) {
     }, null, 2),
     '',
     'Return JSON only.',
+    'The JSON must include exactly these top-level fields: decision, total_score, breakdown, why_recommended, reject_reason, gaps.',
+    'breakdown must be an object with numeric 0-100 fields: skills, responsibilities, company_quality, title, seniority, growth, risk.',
+    'Do not use alternate field names such as scores.',
     'why_recommended should be concise and specific.',
-    'reject_reason should name the main mismatch plainly.',
+    'reject_reason should name the main mismatch plainly. If there is no clear reject_reason and the total score is 60 or higher, decision must be shortlist.',
     'gaps should list the most important missing skills or concerns, not generic filler.',
   ].join('\n');
 }
@@ -825,25 +831,49 @@ function normalizeGeminiScoreValue(value) {
 }
 
 
-function normalizeGeminiResult(parsed, weights) {
-  const breakdown = {
-    skills: normalizeGeminiScoreValue(parsed.breakdown.skills),
-    responsibilities: normalizeGeminiScoreValue(parsed.breakdown.responsibilities),
-    company_quality: normalizeGeminiScoreValue(parsed.breakdown.company_quality),
-    title: normalizeGeminiScoreValue(parsed.breakdown.title),
-    seniority: normalizeGeminiScoreValue(parsed.breakdown.seniority),
-    growth: normalizeGeminiScoreValue(parsed.breakdown.growth),
-    risk: normalizeGeminiScoreValue(parsed.breakdown.risk),
-  };
+function normalizeAiBreakdown(parsed, scoringSource) {
+  const sourceBreakdown = parsed.breakdown ?? parsed.scores;
+  if (!sourceBreakdown || typeof sourceBreakdown !== 'object') {
+    throw new Error('AI response did not contain breakdown or scores.');
+  }
+
+  const values = ['skills', 'responsibilities', 'company_quality', 'title', 'seniority', 'growth', 'risk']
+    .map((field) => Number(sourceBreakdown[field]))
+    .filter(Number.isFinite);
+  const xiaomiUsesHundredPointScale = scoringSource === 'xiaomi' && values.some((value) => value > 10);
+  const normalize = xiaomiUsesHundredPointScale ? clampScore : normalizeGeminiScoreValue;
 
   return {
-    decision: parsed.decision,
-    totalScore: calculateWeightedTotalScore(breakdown, weights),
+    skills: normalize(sourceBreakdown.skills),
+    responsibilities: normalize(sourceBreakdown.responsibilities),
+    company_quality: normalize(sourceBreakdown.company_quality),
+    title: normalize(sourceBreakdown.title),
+    seniority: normalize(sourceBreakdown.seniority),
+    growth: normalize(sourceBreakdown.growth),
+    risk: normalize(sourceBreakdown.risk),
+  };
+}
+
+function normalizeGeminiResult(parsed, weights, scoringSource = 'gemini') {
+  const breakdown = normalizeAiBreakdown(parsed, scoringSource);
+  const totalScore = calculateWeightedTotalScore(breakdown, weights);
+  const rejectReason = parsed.reject_reason ?? '';
+  const rawModelDecision = parsed.decision === 'reject' ? 'reject' : 'shortlist';
+  let decision = rawModelDecision;
+
+  if (decision === 'reject' && !rejectReason.trim() && totalScore >= 60) {
+    decision = 'shortlist';
+  }
+
+  return {
+    decision,
+    rawModelDecision,
+    totalScore,
     breakdown,
     whyRecommended: parsed.why_recommended,
-    rejectReason: parsed.reject_reason ?? '',
+    rejectReason,
     gaps: Array.isArray(parsed.gaps) ? parsed.gaps.slice(0, 8) : [],
-    scoringSource: 'gemini',
+    scoringSource,
   };
 }
 
@@ -855,7 +885,8 @@ function toAiRejectionReasons(result) {
   ];
 
   if (result.scoringFailureMessage) {
-    reasons.push({ field: 'scoringFallback', message: `Gemini scoring failed and heuristic fallback was used: ${result.scoringFailureMessage}` });
+    const providerLabel = result.scoringProviderLabel || 'AI';
+    reasons.push({ field: 'scoringFallback', message: `${providerLabel} scoring failed and heuristic fallback was used: ${result.scoringFailureMessage}` });
   }
 
   const lowestBreakdowns = Object.entries(result.breakdown ?? {})
@@ -883,6 +914,107 @@ function buildCacheEntry({ key, signature, mode, status, result, reasons, messag
   };
 }
 
+function trimTrailingSlash(value) {
+  return String(value ?? '').replace(/\/+$/, '');
+}
+
+function resolvePositiveInteger(value, fallback) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.floor(parsed);
+}
+
+function heuristicProviderConfig() {
+  return {
+    provider: 'heuristic',
+    label: 'Heuristic',
+    apiKey: '',
+    model: '',
+    baseUrl: '',
+    maxCompletionTokens: DEFAULT_XIAOMI_MAX_COMPLETION_TOKENS,
+    scoringMode: 'heuristic-only',
+  };
+}
+
+function resolveScoringProvider(env) {
+  const requestedProvider = String(env.AI_PROVIDER ?? '').trim().toLowerCase();
+
+  if (requestedProvider && !['gemini', 'xiaomi', 'heuristic'].includes(requestedProvider)) {
+    throw new Error(`Unsupported AI_PROVIDER: ${env.AI_PROVIDER}`);
+  }
+
+  if (requestedProvider === 'heuristic') {
+    return heuristicProviderConfig();
+  }
+
+  if (requestedProvider === 'xiaomi') {
+    if (!env.XIAOMI_API_KEY) {
+      throw new Error('AI_PROVIDER=xiaomi requires XIAOMI_API_KEY.');
+    }
+
+    const model = env.XIAOMI_MODEL || DEFAULT_XIAOMI_MODEL;
+    return {
+      provider: 'xiaomi',
+      label: 'Xiaomi MiMo',
+      apiKey: env.XIAOMI_API_KEY,
+      model,
+      baseUrl: trimTrailingSlash(env.XIAOMI_BASE_URL || DEFAULT_XIAOMI_BASE_URL),
+      maxCompletionTokens: resolvePositiveInteger(env.XIAOMI_MAX_COMPLETION_TOKENS, DEFAULT_XIAOMI_MAX_COMPLETION_TOKENS),
+      scoringMode: `xiaomi:${model}`,
+    };
+  }
+
+  if (!requestedProvider && env.XIAOMI_API_KEY && !env.GEMINI_API_KEY) {
+    const model = env.XIAOMI_MODEL || DEFAULT_XIAOMI_MODEL;
+    return {
+      provider: 'xiaomi',
+      label: 'Xiaomi MiMo',
+      apiKey: env.XIAOMI_API_KEY,
+      model,
+      baseUrl: trimTrailingSlash(env.XIAOMI_BASE_URL || DEFAULT_XIAOMI_BASE_URL),
+      maxCompletionTokens: resolvePositiveInteger(env.XIAOMI_MAX_COMPLETION_TOKENS, DEFAULT_XIAOMI_MAX_COMPLETION_TOKENS),
+      scoringMode: `xiaomi:${model}`,
+    };
+  }
+
+  if (requestedProvider === 'gemini' && !env.GEMINI_API_KEY) {
+    throw new Error('AI_PROVIDER=gemini requires GEMINI_API_KEY.');
+  }
+
+  if (env.GEMINI_API_KEY) {
+    const model = env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+    return {
+      provider: 'gemini',
+      label: 'Gemini',
+      apiKey: env.GEMINI_API_KEY,
+      model,
+      baseUrl: '',
+      maxCompletionTokens: DEFAULT_XIAOMI_MAX_COMPLETION_TOKENS,
+      scoringMode: model,
+    };
+  }
+
+  return heuristicProviderConfig();
+}
+
+function parseAiJsonText(text, providerLabel = 'AI') {
+  const raw = String(text ?? '').trim();
+  const unfenced = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+  try {
+    return JSON.parse(unfenced);
+  } catch {
+    const firstBrace = unfenced.indexOf('{');
+    const lastBrace = unfenced.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return JSON.parse(unfenced.slice(firstBrace, lastBrace + 1));
+    }
+    throw new Error(`${providerLabel} response was not valid JSON.`);
+  }
+}
+
 async function callGemini({ apiKey, model, job, requirements, resume }) {
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
@@ -899,8 +1031,68 @@ async function callGemini({ apiKey, model, job, requirements, resume }) {
     throw new Error('Gemini response did not contain text output.');
   }
 
-  const parsed = JSON.parse(response.text);
+  const parsed = parseAiJsonText(response.text, 'Gemini');
   return normalizeGeminiResult(parsed, requirements.weights);
+}
+
+async function callXiaomi({ apiKey, baseUrl, model, maxCompletionTokens, job, requirements, resume }) {
+  const response = await fetch(`${trimTrailingSlash(baseUrl)}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'api-key': apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a strict JSON scoring assistant. Return JSON only, with no markdown fences or commentary.',
+        },
+        {
+          role: 'user',
+          content: buildGeminiPrompt(job, requirements, resume),
+        },
+      ],
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      max_completion_tokens: maxCompletionTokens,
+    }),
+  });
+
+  const raw = await response.text();
+  if (!response.ok) {
+    throw new Error(`Xiaomi MiMo API error ${response.status}: ${raw}`);
+  }
+
+  const payload = parseAiJsonText(raw, 'Xiaomi MiMo');
+  const content = payload.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('Xiaomi MiMo response did not contain message content.');
+  }
+
+  const parsed = parseAiJsonText(content, 'Xiaomi MiMo');
+  return normalizeGeminiResult(parsed, requirements.weights, 'xiaomi');
+}
+
+async function callAiProvider({ providerConfig, job, requirements, resume }) {
+  if (providerConfig.provider === 'gemini') {
+    return callGemini({ apiKey: providerConfig.apiKey, model: providerConfig.model, job, requirements, resume });
+  }
+
+  if (providerConfig.provider === 'xiaomi') {
+    return callXiaomi({
+      apiKey: providerConfig.apiKey,
+      baseUrl: providerConfig.baseUrl,
+      model: providerConfig.model,
+      maxCompletionTokens: providerConfig.maxCompletionTokens,
+      job,
+      requirements,
+      resume,
+    });
+  }
+
+  return heuristicScore(job, requirements, resume);
 }
 
 function buildCacheAwareResult({ job, cacheKey, signature, scoringMode, cached }) {
@@ -937,7 +1129,7 @@ function buildCacheAwareResult({ job, cacheKey, signature, scoringMode, cached }
   return null;
 }
 
-async function scoreSingleJob({ job, requirements, resume, apiKey, model, scoringMode, cache, cacheKey, signature }) {
+async function scoreSingleJob({ job, requirements, resume, providerConfig, scoringMode, cache, cacheKey, signature }) {
   const cachedResult = buildCacheAwareResult({
     job,
     cacheKey,
@@ -951,9 +1143,9 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
 
   try {
     const heuristic = heuristicScore(job, requirements, resume);
-    const result = apiKey
-      ? await callGemini({ apiKey, model, job, requirements, resume })
-      : heuristic;
+    const result = providerConfig.provider === 'heuristic'
+      ? heuristic
+      : await callAiProvider({ providerConfig, job, requirements, resume });
 
     if (result.decision !== 'shortlist') {
       const reasons = toAiRejectionReasons(result);
@@ -1004,11 +1196,13 @@ async function scoreSingleJob({ job, requirements, resume, apiKey, model, scorin
         ...job,
         ...fallback,
         scoringFailureMessage,
+        scoringProviderLabel: providerConfig.label,
       };
 
       const scoredFallback = {
         ...fallback,
         scoringFailureMessage,
+        scoringProviderLabel: providerConfig.label,
         modelDecision: fallback.decision,
         decision: fallback.decision === 'shortlist' ? 'scored' : 'reject',
       };
@@ -1086,9 +1280,8 @@ async function mapWithConcurrency(items, limit, worker) {
 }
 
 export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) {
-  const apiKey = env.GEMINI_API_KEY;
-  const model = env.GEMINI_MODEL || DEFAULT_MODEL;
-  const scoringMode = apiKey ? model : 'heuristic-only';
+  const providerConfig = resolveScoringProvider(env);
+  const scoringMode = providerConfig.scoringMode;
   const scoreConcurrency = resolveScoreConcurrency(env);
   const cache = await loadScoreCache(cachePath);
 
@@ -1099,8 +1292,7 @@ export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) 
       job,
       requirements,
       resume,
-      apiKey,
-      model,
+      providerConfig,
       scoringMode,
       cache,
       cacheKey,
@@ -1138,8 +1330,11 @@ export const __testables = {
   heuristicScore,
   determineHeuristicDecision,
   mapWithConcurrency,
+  normalizeAiBreakdown,
   normalizeGeminiResult,
   normalizeGeminiScoreValue,
+  parseAiJsonText,
+  resolveScoringProvider,
   resolveScoreConcurrency,
   riskScore,
   toAiRejectionReasons,
