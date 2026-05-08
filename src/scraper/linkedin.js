@@ -670,6 +670,39 @@ function parseTotalResultsCount(text) {
   return Number(match[1].replace(/,/g, ''));
 }
 
+const PAGINATION_PAGE_ITEM_SELECTOR = '.artdeco-pagination li, .artdeco-pagination button, [class*="pagination"] li, [class*="pagination"] button, button[data-testid^="pagination-indicator-"]';
+
+async function getVisiblePaginationPageState(page) {
+  const pageStates = await page.locator(PAGINATION_PAGE_ITEM_SELECTOR).evaluateAll((elements) => elements
+    .map((element) => {
+      const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
+      const numberMatch = text.match(/\b(\d+)\b/);
+      const className = String(element.className || '');
+      const ariaCurrent = element.getAttribute('aria-current');
+      const current = ariaCurrent === 'true'
+        || ariaCurrent === 'page'
+        || /(?:^|\s)(?:active|selected)(?:\s|$)/i.test(className)
+        || Boolean(element.querySelector('[aria-current="true"], [aria-current="page"], .active, .selected'));
+
+      return numberMatch ? { number: Number(numberMatch[1]), current } : null;
+    })
+    .filter(Boolean)).catch(() => []);
+
+  const pageNumbers = pageStates.map((state) => state.number).filter((value) => Number.isFinite(value));
+  const maxPage = pageNumbers.length > 0 ? Math.max(...pageNumbers) : null;
+  let currentPage = pageStates.find((state) => state.current)?.number ?? null;
+
+  if (!Number.isFinite(currentPage)) {
+    const start = Number(new URL(page.url()).searchParams.get('start') ?? '0');
+    const pageFromUrl = Math.floor(start / 25) + 1;
+    if (pageNumbers.includes(pageFromUrl)) {
+      currentPage = pageFromUrl;
+    }
+  }
+
+  return { currentPage, maxPage };
+}
+
 async function isLastPaginationPage(page) {
   const start = Number(new URL(page.url()).searchParams.get('start') ?? '0');
   const { locator, count: cardCount } = await getJobCardsState(page);
@@ -685,6 +718,12 @@ async function isLastPaginationPage(page) {
   if (usableNextButton) {
     return false;
   }
+
+  const paginationPageState = await getVisiblePaginationPageState(page);
+  if (Number.isFinite(paginationPageState.currentPage) && Number.isFinite(paginationPageState.maxPage)) {
+    return paginationPageState.currentPage >= paginationPageState.maxPage;
+  }
+
   if (visibleSignalCount > 0 && visibleSignalCount < 25) {
     return true;
   }
@@ -979,6 +1018,7 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
         snapshotSignals = hydratedSignals;
       }
     }
+
     const visibleCount = snapshotSignals.filter((signal) => signal.hasText).length;
 
     let addedThisPage = 0;
@@ -1023,10 +1063,6 @@ async function collectJobLinksAcrossPages(page, limit, options = {}) {
 
     if (effectiveFinalUnresolvedDiagnostics.length > 0) {
       console.log(`[scrape] Still unresolved after retry: ${effectiveFinalUnresolvedDiagnostics.join(' || ')}`);
-    }
-
-    if (links.length >= limit) {
-      break;
     }
 
     if (links.length >= limit) {
@@ -1725,6 +1761,7 @@ export const __testables = {
   isLastPaginationPage,
   isNoResultsPage,
   parseTotalResultsCount,
+  getVisiblePaginationPageState,
   parseSalaryFromMainText,
   extractJobIdFromDetailPane,
   isPlaywrightTimeoutError,

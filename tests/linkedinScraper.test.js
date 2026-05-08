@@ -38,6 +38,7 @@ const {
   hasUsableJobDetailDescription,
   waitForUsableJobDetailDescription,
   parseTotalResultsCount,
+  getVisiblePaginationPageState,
   parseCompanySizeFromMainText,
   extractJobIdFromDetailPane,
   waitForDetailPaneJobIdChange,
@@ -648,6 +649,46 @@ test("parseTotalResultsCount returns exact counts and ignores plus-style approxi
   assert.equal(parseTotalResultsCount('2,553 results across Canada'), 2553);
   assert.equal(parseTotalResultsCount('99+ results Alberta, Canada'), null);
   assert.equal(parseTotalResultsCount('No matching jobs'), null);
+});
+
+test("isLastPaginationPage detects the current final pagination number without a Next button", async () => {
+  const paginationSelector = '.artdeco-pagination li, .artdeco-pagination button, [class*="pagination"] li, [class*="pagination"] button, button[data-testid^="pagination-indicator-"]';
+  const paginationElement = (text, className = '') => ({
+    textContent: text,
+    className,
+    getAttribute: () => null,
+    querySelector: () => null,
+  });
+  const page = {
+    url() {
+      return 'https://www.linkedin.com/jobs/search-results/?start=50';
+    },
+    locator(selector) {
+      if (selector === '[data-view-name="job-search-job-card"]') {
+        return createLocator({ count: 25, evaluateAllResult: Array.from({ length: 25 }, (_, index) => ({ index, text: `Job ${index + 1}`, hasText: true, jobId: String(index + 1) })) });
+      }
+      if (selector === 'body') {
+        return createLocator({ text: '99+ results Alberta, Canada Previous 1 2 3' });
+      }
+      if (selector === '[data-testid="pagination-controls-next-button-hidden"], [data-testid="pagination-controls-next-button-visible"], .artdeco-pagination__button--next, button[aria-label="Next"], button[aria-label="Next Page"]') {
+        return { evaluateAll: async () => [] };
+      }
+      if (selector === paginationSelector) {
+        return {
+          evaluateAll: async (callback) => callback([
+            paginationElement('Previous'),
+            paginationElement('1'),
+            paginationElement('2'),
+            paginationElement('3', 'active selected'),
+          ]),
+        };
+      }
+      return createLocator({ count: 0 });
+    },
+  };
+
+  assert.deepEqual(await getVisiblePaginationPageState(page), { currentPage: 3, maxPage: 3 });
+  assert.equal(await isLastPaginationPage(page), true);
 });
 
 
