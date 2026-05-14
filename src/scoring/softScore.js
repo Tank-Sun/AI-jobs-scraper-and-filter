@@ -9,7 +9,7 @@ const DEFAULT_XIAOMI_MODEL = 'mimo-v2.5-pro';
 const DEFAULT_XIAOMI_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 const DEFAULT_XIAOMI_MAX_COMPLETION_TOKENS = 2048;
 const DEFAULT_SCORE_CONCURRENCY = 4;
-const SCORING_SIGNATURE_VERSION = '2026-04-09-heuristic-fallback-aligned-v17';
+const SCORING_SIGNATURE_VERSION = '2026-05-14-onsite-neutral-location-guidance-v21';
 
 const PRODUCT_ENGINEERING_TERMS = [
   'product',
@@ -610,6 +610,26 @@ function determineHeuristicDecision(job, breakdown, totalScore) {
   };
 }
 
+
+const LOCATION_BUCKET_DESCRIPTIONS = {
+  'remote-canada': 'Remote roles based in Canada or open to candidates in Canada.',
+  'remote-us': 'Remote roles based in the United States or open to candidates in the United States.',
+  'alberta-ca': 'Alberta, Canada, including Calgary, Edmonton, and Alberta-wide roles.',
+  'british-columbia-ca': 'British Columbia, Canada, including Vancouver, Victoria, and BC-wide roles.',
+  'ontario-ca': 'Ontario, Canada, including Toronto, Waterloo, Ottawa, and Ontario-wide roles.',
+  'seattle-wa': 'Seattle, WA or Washington-state roles.',
+  'san-francisco-ca': 'San Francisco, CA, the SF Bay Area, or nearby Bay Area roles.',
+  'san-jose-ca': 'San Jose, CA or South Bay roles.',
+  'los-angeles-ca': 'Los Angeles, CA or LA metro roles.',
+};
+
+function buildLocationRequirementGuidance(requirements) {
+  return (requirements.must_have_locations ?? []).map((bucket) => ({
+    bucket,
+    meaning: LOCATION_BUCKET_DESCRIPTIONS[bucket] ?? bucket,
+  }));
+}
+
 function heuristicScore(job, requirements, resume) {
   const weights = requirements.weights;
   const growthBase = (job.description ?? '').toLowerCase().includes('growth') ? 80 : 45;
@@ -658,6 +678,8 @@ function buildGeminiPrompt(job, requirements, resume) {
     '- Prefer actual day-to-day work over a flattering title. If the title sounds good but the responsibilities are clearly off-target, reject it. Otherwise keep borderline roles for ranking.' ,
     '- Prefer evidence from the job description and metadata. Do not invent missing facts.',
     '- Missing company size is fine. Company size is a filtering preference, not a score bonus. Jobs within the allowed size range should not get extra credit for simply being larger.',
+    '- Location bucket guidance is authoritative. If a job location maps to an allowed location bucket, do not reject it as outside allowed locations. Calgary, AB and Edmonton, AB are allowed when alberta-ca is listed.',
+    '- On-site, hybrid, and remote are neutral work-arrangement metadata unless the requirements explicitly list one as a red flag. Do not lower any score, infer a remote/flexible preference, or reject because a role is full-time in-office when the city/location is allowed.',
     '- Missing employment type or visa policy should not by itself cause rejection or lower fit. Only explicit incompatible values should count against the role.',
     '- Missing explicit mention of TypeScript, React, or Node.js should be treated as uncertainty, not as an automatic rejection, if the title and responsibilities still point to strong product/full-stack/backend/frontend work.' ,
     '- For backend roles, do not require an exact TypeScript/Node.js keyword match before keeping the role. If the work still looks product-facing, AI-application-facing, or plausibly adjacent to the candidate\'s stack, prefer keeping it with a lower skills score instead of rejecting it outright.' ,
@@ -688,6 +710,7 @@ function buildGeminiPrompt(job, requirements, resume) {
     'Requirements:',
     JSON.stringify({
       must_have_locations: requirements.must_have_locations,
+      allowed_location_interpretation: buildLocationRequirementGuidance(requirements),
       must_have_company_size: requirements.must_have_company_size,
       must_have_employment_types: requirements.must_have_employment_types,
       visa_policy: requirements.visa_policy,
@@ -1321,6 +1344,7 @@ export async function scoreJobs({ jobs, requirements, resume, env, cachePath }) 
 
 export const __testables = {
   buildGeminiPrompt,
+  buildLocationRequirementGuidance,
   buildScoreCacheKey,
   buildScoreSignature,
   calculateWeightedTotalScore,

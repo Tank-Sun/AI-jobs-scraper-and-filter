@@ -25,7 +25,7 @@ const normalization = {
 
 const requirements = {
   must_have_locations: ['remote-us', 'seattle-wa'],
-  must_have_company_size: ['51-200', '201-500'],
+  must_have_company_size: ['11-50', '51-200', '201-500'],
   must_have_employment_types: ['full-time'],
   visa_policy: ['tn-eligible', 'no-sponsorship-required'],
   target_titles: ['software engineer'],
@@ -67,7 +67,7 @@ test('applyHardFilters accepts deterministic matches and keeps AI signals for am
   assert.match(result.accepted[0].aiSignals.join(','), /title_not_in_preferred_lists/);
 });
 
-test('applyHardFilters soft-flags oversized companies but rejects undersized ones and keeps missing company size as ambiguity', () => {
+test('applyHardFilters soft-flags oversized companies and keeps missing company size as ambiguity', () => {
   const oversized = [
     {
       title: 'Software Engineer',
@@ -106,11 +106,11 @@ test('applyHardFilters soft-flags oversized companies but rejects undersized one
 });
 
 
-test('applyHardFilters still rejects companies below the preferred size range', () => {
-  const tooSmall = [
+test('applyHardFilters accepts 11-50 as an allowed company size', () => {
+  const small = [
     {
       title: 'Software Engineer',
-      company: 'TinyCo',
+      company: 'SmallCo',
       location: 'Remote',
       employmentType: 'Full-Time',
       visaPolicy: 'No sponsorship',
@@ -120,14 +120,14 @@ test('applyHardFilters still rejects companies below the preferred size range', 
     },
   ];
 
-  const result = applyHardFilters(tooSmall, requirements, normalization);
-  assert.equal(result.accepted.length, 0);
-  assert.equal(result.rejected.length, 1);
-  assert.match(result.rejected[0].reasons.map((item) => item.field).join(','), /companySize/);
+  const result = applyHardFilters(small, requirements, normalization);
+  assert.equal(result.accepted.length, 1);
+  assert.equal(result.rejected.length, 0);
+  assert.doesNotMatch(result.accepted[0].aiSignals.join(','), /company_size_outside_preferred_range|ai_company_size_override/);
 });
 
 
-test('applyHardFilters lets AI-related roles bypass the undersized company hard filter', () => {
+test('applyHardFilters accepts AI-related 11-50 roles without needing an override', () => {
   const aiRole = [
     {
       title: 'Senior Software Engineer, AI',
@@ -144,7 +144,7 @@ test('applyHardFilters lets AI-related roles bypass the undersized company hard 
   const result = applyHardFilters(aiRole, requirements, normalization);
   assert.equal(result.accepted.length, 1);
   assert.equal(result.rejected.length, 0);
-  assert.match(result.accepted[0].aiSignals.join(','), /ai_company_size_override/);
+  assert.doesNotMatch(result.accepted[0].aiSignals.join(','), /ai_company_size_override/);
 });
 
 test('applyHardFilters rejects staff titles and only keeps junior roles when explicit experience stays within 1-3 years', () => {

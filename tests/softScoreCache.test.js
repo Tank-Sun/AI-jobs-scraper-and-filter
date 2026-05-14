@@ -7,8 +7,8 @@ import path from 'node:path';
 import { scoreJobs, __testables } from '../src/scoring/softScore.js';
 
 const requirements = {
-  must_have_locations: ['remote-us'],
-  must_have_company_size: ['51-200'],
+  must_have_locations: ['remote-us', 'alberta-ca'],
+  must_have_company_size: ['11-50', '51-200'],
   must_have_employment_types: ['full-time'],
   visa_policy: ['tn-eligible'],
   target_titles: ['software engineer'],
@@ -65,7 +65,7 @@ test('riskScore ignores missing employment and visa metadata by themselves', () 
 });
 
 
-test('heuristicScore prefers 51-1000 companies over 1001-5000, and 1001-5000 over 5000+', () => {
+test('heuristicScore prefers 11-1000 companies over 1001-5000, and 1001-5000 over 5000+', () => {
   const preferredSize = heuristicScore({
     ...jobs[0],
     companySize: '201-500',
@@ -98,9 +98,16 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   const prompt = buildGeminiPrompt(jobs[0], requirements, resume);
 
   assert.match(prompt, /Missing employment type or visa policy should not by itself cause rejection or lower fit\./);
+  assert.match(prompt, /Location bucket guidance is authoritative/);
+  assert.match(prompt, /Calgary, AB and Edmonton, AB are allowed when alberta-ca is listed/);
+  assert.match(prompt, /On-site, hybrid, and remote are neutral work-arrangement metadata/);
+  assert.match(prompt, /Do not lower any score, infer a remote\/flexible preference, or reject because a role is full-time in-office/);
+  assert.match(prompt, /\"bucket\": \"alberta-ca\"/);
+  assert.match(prompt, /Calgary, Edmonton, and Alberta-wide roles/);
   assert.match(prompt, /Missing explicit mention of TypeScript, React, or Node\.js should be treated as uncertainty, not as an automatic rejection/);
   assert.match(prompt, /Do not reject merely because avoid-list technologies appear somewhere in the posting\./);
   assert.match(prompt, /If company size is outside the preferred range but the role is otherwise strong, lower enthusiasm and lower company-quality\/growth signals instead of rejecting on that basis alone\./);
+  assert.ok(prompt.includes('"must_have_company_size": [\n    "11-50"'));
   assert.match(prompt, /Do not use company size by itself as the deciding reason to reject a role when the title fit, responsibilities, and stack fit are otherwise strong\./);
   assert.match(prompt, /You must make the full shortlist-or-reject decision using only the candidate profile, requirements, and the job information below\./);
   assert.match(prompt, /full-stack roles first, then backend roles with a fitting stack, then frontend roles/i);
@@ -116,7 +123,7 @@ test('buildGeminiPrompt treats missing metadata and unconfirmed stack as uncerta
   assert.ok(!prompt.includes('screeningNotes'));
 });
 
-const { buildGeminiPrompt, buildScoreSignature, calculateWeightedTotalScore, determineHeuristicDecision, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, normalizeAiBreakdown, normalizeGeminiResult, parseAiJsonText, resolveScoringProvider, riskScore, toAiRejectionReasons } = __testables;
+const { buildGeminiPrompt, buildLocationRequirementGuidance, buildScoreSignature, calculateWeightedTotalScore, determineHeuristicDecision, hasAiProductSignal, hasDevexSignal, hasStrongProductSignal, heuristicScore, normalizeAiBreakdown, normalizeGeminiResult, parseAiJsonText, resolveScoringProvider, riskScore, toAiRejectionReasons } = __testables;
 
 test('hasAiProductSignal boosts AI application roles but not model-training or platform roles', () => {
   assert.equal(

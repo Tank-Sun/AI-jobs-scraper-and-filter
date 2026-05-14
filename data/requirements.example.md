@@ -3,6 +3,7 @@ must_have_locations:
 - remote-canada
 
 must_have_company_size:
+- 11-50
 - 51-200
 - 201-500
 - 501-1000
@@ -64,7 +65,6 @@ negative_skills:
 - embedded systems
 
 red_flags:
-- on-site five days
 - unpaid
 - contract-only
 - consulting bodyshop
